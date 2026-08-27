@@ -1,0 +1,143 @@
+//! Small shared helpers: time formatting and IPv4 arithmetic.
+
+/// Current unix time in whole seconds.
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Format a unix timestamp (seconds) as local-ish `YYYY-MM-DD HH:MM` in UTC.
+/// We avoid a chrono dependency; the CLI/GUI treat this as display-only.
+pub fn fmt_time(ts: i64) -> String {
+    let days = ts.div_euclid(86_400);
+    let secs = ts.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60
+    )
+}
+
+/// Days-from-civil inverse (Howard Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Parse a dotted-quad IPv4 string into a host-order u32.
+pub fn parse_ipv4(s: &str) -> Option<u32> {
+    let mut out: u32 = 0;
+    let parts: Vec<&str> = s.trim().split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    for part in parts {
+        let octet: u32 = part.parse().ok()?;
+        if octet > 255 || (part.len() > 1 && part.starts_with('0')) {
+            return None;
+        }
+        out = (out << 8) | octet;
+    }
+    Some(out)
+}
+
+/// Format a host-order u32 as dotted quad.
+pub fn format_ipv4(addr: u32) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        (addr >> 24) & 0xff,
+        (addr >> 16) & 0xff,
+        (addr >> 8) & 0xff,
+        addr & 0xff
+    )
+}
+
+/// True if `ip` (dotted quad) is inside `network`/`prefix_len`.
+pub fn ipv4_in_network(ip: &str, network: u32, prefix_len: u8) -> bool {
+    match parse_ipv4(ip) {
+        Some(a) => {
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix_len as u32)
+            };
+            a & mask == network & mask
+        }
+        None => false,
+    }
+}
+
+/// Generate every address in `network`/`prefix_len` (host order), excluding
+/// the network address itself. Only used by the privileged full-ARP strategy.
+pub fn enumerate_network(network: u32, prefix_len: u8) -> Vec<u32> {
+    let count = if prefix_len >= 31 {
+        u32::from(prefix_len == 32)
+    } else {
+        1u32 << (32 - prefix_len as u32)
+    };
+    let mask = if prefix_len == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix_len as u32)
+    };
+    (1..count).map(|i| (network & mask) + i).collect()
+}
+
+/// True if `ip` (dotted quad) is inside any of the interface's on-link
+/// networks.
+pub fn ipv4_in_network_of(ip: &str, iface: &crate::model::Interface) -> bool {
+    iface.ipv4.iter().any(|c| match parse_ipv4(&c.addr) {
+        Some(a) => {
+            let mask = if c.prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - c.prefix)
+            };
+            parse_ipv4(ip).is_some_and(|i| i & mask == a & mask)
+        }
+        None => false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv4_roundtrip() {
+        assert_eq!(parse_ipv4("192.168.1.10"), Some(0xC0A8_010A));
+        assert_eq!(format_ipv4(0xC0A8_010A), "192.168.1.10");
+        assert_eq!(parse_ipv4("192.168.1"), None);
+        assert_eq!(parse_ipv4("192.168.1.256"), None);
+        assert_eq!(parse_ipv4("192.168.01.10"), None);
+    }
+
+    #[test]
+    fn membership() {
+        assert!(ipv4_in_network("192.168.1.77", 0xC0A8_0100, 24));
+        assert!(!ipv4_in_network("192.168.2.77", 0xC0A8_0100, 24));
+    }
+
+    #[test]
+    fn enumeration_excludes_network_address() {
+        let addrs = enumerate_network(0xC0A8_0100, 30);
+        assert_eq!(addrs, vec![0xC0A8_0101, 0xC0A8_0102, 0xC0A8_0103]);
+    }
+
+    #[test]
+    fn time_format() {
+        assert_eq!(fmt_time(0), "1970-01-01 00:00");
+        assert_eq!(fmt_time(1_753_000_000), "2025-07-20 08:26");
+    }
+}

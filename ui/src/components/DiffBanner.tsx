@@ -1,0 +1,68 @@
+import type { LastDiff, TransitionKind } from "../types";
+
+const MARKS: Record<TransitionKind, string> = {
+  new: "+",
+  changed: "~",
+  gone: "−",
+  returned: "↩",
+};
+
+const LABELS: Record<TransitionKind, string> = {
+  new: "new",
+  changed: "changed",
+  gone: "gone",
+  returned: "returned",
+};
+
+export default function DiffBanner({ diff }: { diff: LastDiff }) {
+  const counts = diff.transitions.reduce<Record<string, number>>((acc, t) => {
+    acc[t.kind] = (acc[t.kind] ?? 0) + 1;
+    return acc;
+  }, {});
+  const summary =
+    diff.transitions.length === 0
+      ? "No changes since the last scan."
+      : Object.entries(counts)
+          .map(([k, v]) => `${v} ${LABELS[k as TransitionKind]}`)
+          .join(" · ");
+
+  return (
+    <div className={diff.partial ? "diff partial" : "diff"}>
+      <div className="diff-summary">
+        <span className="diff-title">Last scan {diff.finished_at_label}</span>
+        <span className="diff-count">{summary}</span>
+        {diff.partial ? (
+          <span className="badge partial-badge" title="A partial scan never reports devices as gone">
+            partial — “gone” suppressed
+          </span>
+        ) : (
+          <span className="badge ok">complete</span>
+        )}
+      </div>
+      {diff.partial && (
+        <ul className="partial-reasons">
+          {diff.partial_reasons.map((r, i) => (
+            <li key={i}>
+              {r.strategy}: {r.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {diff.transitions.length > 0 && (
+        <ul className="transitions">
+          {diff.transitions.map((t, i) => (
+            <li key={i} className={t.kind}>
+              <span className="mark">{MARKS[t.kind]}</span> {t.device_display}
+              {t.changes.length > 0 && (
+                <span className="muted">
+                  {" "}
+                  ({t.changes.map((c) => `${c.field}: ${c.from ?? "∅"}→${c.to ?? "∅"}`).join(", ")})
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

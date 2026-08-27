@@ -1,0 +1,373 @@
+//! Scan-vs-inventory diff engine.
+//!
+//! This is where the product's core trust property lives (docs/design.md
+//! rule 6): a scan whose privilege state was not confirmed — or which did not
+//! complete — is *partial* and may never emit a `gone` transition, nor advance
+//! a device's miss streak. `gone` requires a complete scan plus the device
+//! having been missed for `grace_scans` consecutive *complete* scans.
+
+use std::collections::HashMap;
+
+use crate::model::{FieldChange, Transition, TransitionKind};
+
+/// How complete a scan was; produced by the scanner from strategy results and
+/// the privilege probe.
+#[derive(Debug, Clone)]
+pub struct ScanIntegrity {
+    /// All enabled strategies had their privilege confirmed and finished.
+    pub complete: bool,
+    pub reasons: Vec<(String, String)>,
+}
+
+impl ScanIntegrity {
+    pub fn complete() -> ScanIntegrity {
+        ScanIntegrity {
+            complete: true,
+            reasons: Vec::new(),
+        }
+    }
+
+    pub fn partial(strategy: &str, reason: &str) -> ScanIntegrity {
+        ScanIntegrity {
+            complete: false,
+            reasons: vec![(strategy.to_string(), reason.to_string())],
+        }
+    }
+}
+
+/// The previous state of one device on the scanned network.
+#[derive(Debug, Clone)]
+pub struct PriorState {
+    pub device_key: String,
+    pub display_name: String,
+    pub last_ip: Option<String>,
+    pub last_hostname: Option<String>,
+    pub last_mac: Option<String>,
+    pub miss_streak: i64,
+}
+
+/// The newly observed state of one device.
+#[derive(Debug, Clone)]
+pub struct ObservedState {
+    pub device_key: String,
+    pub display_name: String,
+    pub ip: String,
+    pub hostname: Option<String>,
+    pub mac: Option<String>,
+}
+
+/// Outcome of the diff, including updated miss streaks the store should apply.
+pub struct DiffOutcome {
+    pub transitions: Vec<Transition>,
+    /// (device_key, new_streak) for devices not seen this scan. Only advanced
+    /// on complete scans; empty on partial scans by design.
+    pub streak_updates: Vec<(String, i64)>,
+    /// Devices whose streak should reset because they were seen again.
+    pub streak_resets: Vec<String>,
+}
+
+pub fn compute_diff(
+    prior: HashMap<String, PriorState>,
+    observed: &HashMap<String, ObservedState>,
+    integrity: &ScanIntegrity,
+    grace_scans: u32,
+) -> DiffOutcome {
+    let mut transitions = Vec::new();
+    let mut streak_updates = Vec::new();
+    let mut streak_resets = Vec::new();
+
+    // --- devices observed this scan ---
+    for obs in observed.values() {
+        match prior.get(&obs.device_key) {
+            None => {
+                // Either genuinely new, or back from `gone` (presence row may
+                // still exist with a stale streak; caller decides via prior).
+                transitions.push(Transition {
+                    kind: TransitionKind::New,
+                    device_key: obs.device_key.clone(),
+                    device_display: obs.display_name.clone(),
+                    changes: vec![],
+                });
+                streak_resets.push(obs.device_key.clone());
+            }
+            Some(p) => {
+                streak_resets.push(obs.device_key.clone());
+                let mut changes = Vec::new();
+                if p.last_ip.as_deref() != Some(obs.ip.as_str()) {
+                    changes.push(FieldChange {
+                        field: "ip".to_string(),
+                        from: p.last_ip.clone(),
+                        to: Some(obs.ip.clone()),
+                    });
+                }
+                if p.last_hostname != obs.hostname
+                    && (p.last_hostname.is_some() || obs.hostname.is_some())
+                {
+                    changes.push(FieldChange {
+                        field: "hostname".to_string(),
+                        from: p.last_hostname.clone(),
+                        to: obs.hostname.clone(),
+                    });
+                }
+                if p.last_mac != obs.mac && (p.last_mac.is_some() || obs.mac.is_some()) {
+                    changes.push(FieldChange {
+                        field: "mac".to_string(),
+                        from: p.last_mac.clone(),
+                        to: obs.mac.clone(),
+                    });
+                }
+                if !changes.is_empty() {
+                    transitions.push(Transition {
+                        kind: TransitionKind::Changed,
+                        device_key: obs.device_key.clone(),
+                        device_display: obs.display_name.clone(),
+                        changes,
+                    });
+                }
+                // Returning from a long absence: streak had hit grace before.
+                if p.miss_streak >= grace_scans as i64 {
+                    transitions.push(Transition {
+                        kind: TransitionKind::Returned,
+                        device_key: obs.device_key.clone(),
+                        device_display: obs.display_name.clone(),
+                        changes: vec![],
+                    });
+                }
+            }
+        }
+    }
+
+    // --- devices NOT observed this scan ---
+    for (key, p) in &prior {
+        if observed.contains_key(key) {
+            continue;
+        }
+        if !integrity.complete {
+            // Integrity rule: an incomplete scan is *no evidence of absence*.
+            // No `gone`, and the miss streak must not advance.
+            continue;
+        }
+        let new_streak = p.miss_streak + 1;
+        streak_updates.push((key.clone(), new_streak));
+        if new_streak == grace_scans as i64 {
+            transitions.push(Transition {
+                kind: TransitionKind::Gone,
+                device_key: key.clone(),
+                device_display: p.display_name.clone(),
+                changes: vec![],
+            });
+        }
+    }
+
+    DiffOutcome {
+        transitions,
+        streak_updates,
+        streak_resets,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn prior(key: &str, ip: &str, mac: Option<&str>, hostname: Option<&str>) -> PriorState {
+        PriorState {
+            device_key: key.into(),
+            display_name: format!("dev-{key}"),
+            last_ip: Some(ip.into()),
+            last_hostname: hostname.map(|s| s.into()),
+            last_mac: mac.map(|s| s.into()),
+            miss_streak: 0,
+        }
+    }
+
+    fn observed(key: &str, ip: &str, mac: Option<&str>, hostname: Option<&str>) -> ObservedState {
+        ObservedState {
+            device_key: key.into(),
+            display_name: format!("dev-{key}"),
+            ip: ip.into(),
+            hostname: hostname.map(|s| s.into()),
+            mac: mac.map(|s| s.into()),
+        }
+    }
+
+    fn map<V>(entries: Vec<(String, V)>) -> HashMap<String, V> {
+        entries.into_iter().collect()
+    }
+
+    #[test]
+    fn partial_scan_never_emits_gone() {
+        for reason in ["icmp unavailable", "helper refused", "strategy error"] {
+            let prior = map(vec![(
+                "a".into(),
+                prior("a", "10.0.0.1", Some("aa:aa:aa:aa:aa:aa"), Some("host-a")),
+            )]);
+            let observed: HashMap<String, ObservedState> = HashMap::new();
+            let integrity = ScanIntegrity::partial("ping-sweep", reason);
+            let out = compute_diff(prior, &observed, &integrity, 2);
+            assert!(
+                !out.transitions
+                    .iter()
+                    .any(|t| t.kind == TransitionKind::Gone),
+                "partial scan ({reason}) must not emit gone"
+            );
+            assert!(
+                out.streak_updates.is_empty(),
+                "partial scan must not advance streaks"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_scan_still_allows_new_and_changed() {
+        let prior_map = map(vec![(
+            "a".into(),
+            prior("a", "10.0.0.1", Some("aa:aa:aa:aa:aa:aa"), Some("host-a")),
+        )]);
+        let observed = map(vec![
+            (
+                "a".into(),
+                observed("a", "10.0.0.9", Some("aa:aa:aa:aa:aa:aa"), Some("host-a")),
+            ),
+            (
+                "b".into(),
+                observed("b", "10.0.0.2", Some("bb:bb:bb:bb:bb:bb"), None),
+            ),
+        ]);
+        let out = compute_diff(prior_map, &observed, &ScanIntegrity::partial("x", "y"), 2);
+        assert!(out
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::New));
+        assert!(out
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Changed));
+    }
+
+    #[test]
+    fn gone_requires_grace_on_complete_scans() {
+        let empty: HashMap<String, ObservedState> = HashMap::new();
+        // First miss: streak 1 < grace 2 → no gone yet.
+        let p0 = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 0,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let out1 = compute_diff(p0, &empty, &ScanIntegrity::complete(), 2);
+        assert!(!out1
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Gone));
+        assert_eq!(out1.streak_updates[0].1, 1);
+        // Second consecutive miss: streak 2 == grace → gone exactly once.
+        let p1 = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 1,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let out2 = compute_diff(p1, &empty, &ScanIntegrity::complete(), 2);
+        let gones: Vec<_> = out2
+            .transitions
+            .iter()
+            .filter(|t| t.kind == TransitionKind::Gone)
+            .collect();
+        assert_eq!(gones.len(), 1);
+        // Third miss: streak 3 > grace → not emitted again.
+        let p2 = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 2,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let out3 = compute_diff(p2, &empty, &ScanIntegrity::complete(), 2);
+        assert!(!out3
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Gone));
+    }
+
+    #[test]
+    fn partial_miss_does_not_count_toward_grace() {
+        // Miss, partial miss, complete miss: only 2 real misses → gone only
+        // on the scan *after* that if complete again.
+        let empty: HashMap<String, ObservedState> = HashMap::new();
+        let p0 = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 0,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let after_complete = compute_diff(p0, &empty, &ScanIntegrity::complete(), 2).streak_updates;
+        assert_eq!(after_complete[0].1, 1);
+        // A partial scan leaves the streak untouched.
+        let p1a = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 1,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let after_partial = compute_diff(p1a, &empty, &ScanIntegrity::partial("s", "r"), 2);
+        assert!(after_partial.streak_updates.is_empty());
+        // Next complete miss reaches grace 2.
+        let p1b = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 1,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let out = compute_diff(p1b, &empty, &ScanIntegrity::complete(), 2);
+        assert!(out
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Gone));
+    }
+
+    #[test]
+    fn returned_after_absence() {
+        let p = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 5,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let observed = map(vec![("a".into(), observed("a", "10.0.0.1", None, None))]);
+        let out = compute_diff(p, &observed, &ScanIntegrity::complete(), 2);
+        assert!(out
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Returned));
+    }
+
+    #[test]
+    fn field_changes_detected() {
+        let p = map(vec![(
+            "a".into(),
+            prior("a", "10.0.0.1", Some("aa:aa:aa:aa:aa:aa"), Some("old-name")),
+        )]);
+        let observed = map(vec![(
+            "a".into(),
+            observed("a", "10.0.0.2", Some("aa:aa:aa:aa:aa:ab"), Some("new-name")),
+        )]);
+        let out = compute_diff(p, &observed, &ScanIntegrity::complete(), 2);
+        let t = out
+            .transitions
+            .iter()
+            .find(|t| t.kind == TransitionKind::Changed)
+            .unwrap();
+        let fields: Vec<&str> = t.changes.iter().map(|c| c.field.as_str()).collect();
+        assert!(fields.contains(&"ip"));
+        assert!(fields.contains(&"hostname"));
+        assert!(fields.contains(&"mac"));
+    }
+}
