@@ -107,6 +107,16 @@ const MIGRATIONS: &[&str] = &[
         ('enabled_strategies', '[\"arp-cache\",\"ping-sweep\",\"mdns\",\"ssdp\",\"netbios\",\"arp-ping\"]');",
 ];
 
+/// What a frontend needs to describe a finished scan: whether it was partial,
+/// when it ended, which strategies ran, and why it fell short.
+#[derive(Debug, Clone)]
+pub struct ScanSummary {
+    pub partial: bool,
+    pub finished_at: i64,
+    pub strategies: Vec<String>,
+    pub partial_reasons: Vec<PartialReason>,
+}
+
 /// A device as stored, with resolved identity.
 #[derive(Debug, Clone)]
 pub struct DeviceRow {
@@ -583,6 +593,7 @@ impl Store {
         Ok(self.conn.transaction()?)
     }
 
+    #[allow(clippy::too_many_arguments)] // one argument per scans column
     pub fn insert_scan(
         tx: &rusqlite::Transaction<'_>,
         started_at: i64,
@@ -613,8 +624,7 @@ impl Store {
         Ok(tx.last_insert_rowid())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // one argument per observations column
     pub fn insert_observation(
         tx: &rusqlite::Transaction<'_>,
         scan_id: i64,
@@ -687,10 +697,7 @@ impl Store {
     }
 
     /// Summary of a scan for GUI/CLI "last diff" views.
-    pub fn scan_summary(
-        &self,
-        scan_id: i64,
-    ) -> Result<Option<(bool, i64, Vec<String>, Vec<PartialReason>)>> {
+    pub fn scan_summary(&self, scan_id: i64) -> Result<Option<ScanSummary>> {
         let row = self
             .conn
             .query_row(
@@ -709,13 +716,12 @@ impl Store {
             .optional()?;
         match row {
             None => Ok(None),
-            Some((partial, finished_at, strategies_json, reasons_json)) => {
-                let strategies: Vec<String> =
-                    serde_json::from_str(&strategies_json).unwrap_or_default();
-                let reasons: Vec<PartialReason> =
-                    serde_json::from_str(&reasons_json).unwrap_or_default();
-                Ok(Some((partial, finished_at, strategies, reasons)))
-            }
+            Some((partial, finished_at, strategies_json, reasons_json)) => Ok(Some(ScanSummary {
+                partial,
+                finished_at,
+                strategies: serde_json::from_str(&strategies_json).unwrap_or_default(),
+                partial_reasons: serde_json::from_str(&reasons_json).unwrap_or_default(),
+            })),
         }
     }
 

@@ -122,7 +122,7 @@ fn linux_icmp_dgram(addr: IpAddr, timeout: Duration) -> bool {
     }
     let mut buf = [0u8; 64];
     let mut from_len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-    let mut from = std::mem::zeroed::<libc::sockaddr_in>();
+    let mut from = unsafe { std::mem::zeroed::<libc::sockaddr_in>() };
     let n = unsafe {
         libc::recvfrom(
             fd,

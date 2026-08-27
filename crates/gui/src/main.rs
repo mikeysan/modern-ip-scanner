@@ -124,19 +124,18 @@ fn last_diff(
     let Some((scan_id, _)) = store.last_scan_for_network(&target).map_err(store_err)? else {
         return Ok(None);
     };
-    let summary = store.scan_summary(scan_id).map_err(store_err)?;
-    let Some((partial, finished_at, strategies, reasons)) = summary else {
+    let Some(summary) = store.scan_summary(scan_id).map_err(store_err)? else {
         return Ok(None);
     };
     let transitions = store.transitions_of_scan(scan_id).map_err(store_err)?;
     Ok(Some(serde_json::json!({
         "scan_id": scan_id,
         "network": target,
-        "finished_at": finished_at,
-        "finished_at_label": fmt_time(finished_at),
-        "partial": partial,
-        "partial_reasons": reasons,
-        "strategies": strategies,
+        "finished_at": summary.finished_at,
+        "finished_at_label": fmt_time(summary.finished_at),
+        "partial": summary.partial,
+        "partial_reasons": summary.partial_reasons,
+        "strategies": summary.strategies,
         "transitions": transitions,
     })))
 }

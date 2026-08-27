@@ -94,8 +94,35 @@ rewrite.
 
 ## Status / notes
 
-- Timestamps are displayed in UTC (`YYYY-MM-DD HH:MM`).
-- The Linux code paths (getifaddrs, /proc/net/arp, dgram ICMP, raw-ARP
-  helper) are written to spec but only smoke-tested on Windows so far; run
-  `cargo test` on a Linux box for the same guarantees.
+- Timestamps are displayed in UTC (`YYYY-MM-DD HH:MM`) by the CLI, and in
+  local time by the GUI. They should agree; they do not yet.
+- The Linux code paths (getifaddrs, `/proc/net/arp`, dgram ICMP, raw-ARP
+  helper) **compile and are covered by CI**, and the helper's ARP wire format
+  and routing logic are unit-tested on every platform. They have still never
+  been *run* against a real Linux network — treat the helper's raw-socket path
+  as unproven until someone does.
 - `docs/design.md` holds the invariants — check changes against it.
+
+## Working on this
+
+CI builds and tests on Linux and Windows (`.github/workflows/ci.yml`). That
+matters more than usual here: every Linux-only line sits behind a `#[cfg]`
+that a Windows build never type-checks, so the platform rots silently without
+it. Two Linux-only defects were introduced or caught in a single session
+before CI existed.
+
+Locally on Windows you can still check the helper for Linux, because it has no
+C dependencies:
+
+```bash
+rustup target add x86_64-unknown-linux-gnu
+cargo check -p laninv-helper --target x86_64-unknown-linux-gnu
+```
+
+`laninv-core` cannot be cross-checked this way — bundled SQLite needs a C
+cross-compiler — so CI is the gate for it.
+
+Keep as little as possible behind `#[cfg]`. Wire formats, parsing and address
+arithmetic are platform-independent even when only one platform calls them;
+put them in a plain module so both builds check them and both test runs
+exercise them (see `crates/helper/src/main.rs::arp`).
