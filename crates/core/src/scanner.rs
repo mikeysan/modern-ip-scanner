@@ -128,6 +128,10 @@ fn snapshot_prior(store: &Store, net_key: &str) -> Result<HashMap<String, PriorS
                 last_hostname: device.as_ref().and_then(|d| d.primary_name.clone()),
                 last_mac: device.as_ref().and_then(|d| d.mac.clone()),
                 miss_streak: p.miss_streak,
+                identity_stable: crate::identity::is_stable(
+                    device.as_ref().and_then(|d| d.primary_name.as_deref()),
+                    device.as_ref().and_then(|d| d.mac.as_deref()),
+                ),
             },
         );
     }
@@ -168,16 +172,20 @@ fn resolve_observed(
 ) -> Result<HashMap<String, ObservedState>, StoreError> {
     let mut observed_states: HashMap<String, ObservedState> = HashMap::new();
     for d in merged {
-        let key = match resolve_identity(store, d, net_key)? {
+        // Stability is judged on everything known about the device, not just
+        // this scan: a name learned earlier still makes it findable.
+        let (key, known_name, known_mac) = match resolve_identity(store, d, net_key)? {
             Resolution::Existing(existing) => {
                 let canonical = maybe_refingerprint(store, &existing, d)?;
+                let name = d.name.clone().or_else(|| existing.primary_name.clone());
+                let mac = d.mac.clone().or_else(|| existing.mac.clone());
                 store.update_device_fields(
                     &canonical,
                     d.name.as_deref(),
-                    d.mac.as_deref().or(existing.mac.as_deref()),
+                    mac.as_deref(),
                     d.vendor.as_deref().or(existing.vendor.as_deref()),
                 )?;
-                canonical
+                (canonical, name, mac)
             }
             Resolution::New(key) => {
                 store.upsert_device(
@@ -187,7 +195,7 @@ fn resolve_observed(
                     d.vendor.as_deref(),
                     net_key,
                 )?;
-                key
+                (key, d.name.clone(), d.mac.clone())
             }
         };
         let display = store
@@ -206,6 +214,10 @@ fn resolve_observed(
                 ip: d.ips.first().cloned().unwrap_or_default(),
                 hostname: d.name.clone(),
                 mac: d.mac.clone(),
+                identity_stable: crate::identity::is_stable(
+                    known_name.as_deref(),
+                    known_mac.as_deref(),
+                ),
             },
         );
     }
@@ -651,6 +663,9 @@ mod tests {
             let ip = observed.get(key).map(|s| s.ip.clone());
             store.upsert_presence(key, net, ip.as_deref()).unwrap();
         }
+        for (key, _) in &outcome.streak_updates {
+            store.bump_miss_streak(key, net).unwrap();
+        }
         outcome.transitions
     }
 
@@ -661,6 +676,75 @@ mod tests {
             .flat_map(|t| t.changes.iter().cloned())
             .map(|c| (c.field, c.from, c.to))
             .collect()
+    }
+
+    #[test]
+    fn a_randomised_mac_device_is_never_reported_gone() {
+        // A phone with a private Wi-Fi address alongside a NAS with a real
+        // vendor OUI. Both stop answering; only one of them can honestly be
+        // called gone, because only one of them can be recognised if it
+        // comes back.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        let first = scan_once(
+            &mut store,
+            &[
+                seen("10.0.0.7", Some("36:93:e6:08:48:d9"), None),
+                seen("10.0.0.8", Some("90:48:46:10:3b:7a"), None),
+            ],
+            "net1",
+        );
+        assert_eq!(first.len(), 2, "both are recorded");
+        let phone = first
+            .iter()
+            .find(|t| t.device_display == "36:93:e6:08:48:d9")
+            .unwrap();
+        assert!(
+            phone.unstable_identity,
+            "the randomised device must be flagged so the UI can explain it"
+        );
+
+        // Two consecutive complete scans with neither present reaches grace.
+        scan_once(&mut store, &[], "net1");
+        let second = scan_once(&mut store, &[], "net1");
+        let gone: Vec<&str> = second
+            .iter()
+            .filter(|t| t.kind == TransitionKind::Gone)
+            .map(|t| t.device_display.as_str())
+            .collect();
+        assert_eq!(
+            gone,
+            vec!["90:48:46:10:3b:7a"],
+            "only the device whose identity would survive a return"
+        );
+    }
+
+    #[test]
+    fn a_randomised_device_that_announces_a_name_becomes_trackable() {
+        // Naming is the escape hatch: a name is matchable across rotations,
+        // so the device stops being ephemeral and can be reported gone.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        let first = scan_once(
+            &mut store,
+            &[seen(
+                "10.0.0.7",
+                Some("36:93:e6:08:48:d9"),
+                Some("my-phone"),
+            )],
+            "net1",
+        );
+        assert!(
+            !first[0].unstable_identity,
+            "a name outlives the MAC that carried it"
+        );
+        scan_once(&mut store, &[], "net1");
+        let second = scan_once(&mut store, &[], "net1");
+        assert!(second.iter().any(|t| t.kind == TransitionKind::Gone));
     }
 
     #[test]

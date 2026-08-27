@@ -36,6 +36,8 @@ export interface Transition {
   device_key: string;
   device_display: string;
   changes: FieldChange[];
+  /** Device changes its MAC by design; it cannot be followed across rotations. */
+  unstable_identity?: boolean;
 }
 
 export interface PartialReason {

@@ -197,6 +197,15 @@ pub struct Transition {
     pub device_display: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<FieldChange>,
+    /// True when this device cannot be re-identified across scans, so the
+    /// transition should be read as "an address appeared", not "a device
+    /// arrived". Omitted from JSON when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unstable_identity: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Summary of a finished scan.

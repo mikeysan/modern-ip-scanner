@@ -41,6 +41,36 @@ pub fn oui(mac: &str) -> Option<String> {
     }
 }
 
+/// True when a MAC carries the locally-administered bit (bit 1 of the first
+/// octet) — the marker every modern phone sets on a randomised address.
+pub fn is_locally_administered(mac: &str) -> bool {
+    let Some(normalized) = normalize_mac(mac) else {
+        return false;
+    };
+    let Some(first) = normalized.split(':').next() else {
+        return false;
+    };
+    u8::from_str_radix(first, 16).is_ok_and(|octet| octet & 0x02 != 0)
+}
+
+/// Whether a device can be re-identified across scans from these signals.
+///
+/// A name is matchable (`find_device_by_name_on_network`), and so is a MAC
+/// that belongs to a real manufacturer. A randomised MAC is not: it changes
+/// by design, so a device carrying one and nothing else cannot be told apart
+/// from a different device the next time it appears. Neither can a device
+/// that offered no MAC and no name at all.
+///
+/// Unstable identities are recorded like any other, but the diff engine may
+/// never report them `gone` — it cannot distinguish "left the network" from
+/// "came back wearing a different address".
+pub fn is_stable(primary_name: Option<&str>, mac: Option<&str>) -> bool {
+    if primary_name.is_some_and(|n| !n.trim().is_empty()) {
+        return true;
+    }
+    mac.is_some_and(|m| normalize_mac(m).is_some() && !is_locally_administered(m))
+}
+
 fn hash_key(parts: &[&str]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"laninv-v1\x00");
@@ -84,14 +114,44 @@ pub fn device_key(primary_name: Option<&str>, mac: Option<&str>, origin_network:
     hash_key(&[&name_part, &oui_part, origin_network])
 }
 
-/// True when a device key was computed without a name signal (MAC fallback).
-pub fn key_is_nameless(key_material_name: Option<&str>) -> bool {
-    key_material_name.is_none()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_locally_administered_bit_marks_a_randomised_mac() {
+        // Bit 1 of the first octet. 0x36 = 0011_0110 -> set.
+        assert!(is_locally_administered("36:93:e6:08:48:d9"));
+        assert!(is_locally_administered("02:00:00:00:00:01"));
+        // 0xc0 = 1100_0000 -> clear; a real vendor OUI.
+        assert!(!is_locally_administered("c0:d7:aa:b4:dc:9b"));
+        assert!(!is_locally_administered("90:48:46:10:3b:7a"));
+        assert!(!is_locally_administered("nonsense"));
+    }
+
+    #[test]
+    fn a_name_makes_an_identity_stable_whatever_the_mac_does() {
+        // The whole point of the composite key: a device that announces a
+        // name can be found again even after its MAC rotates.
+        assert!(is_stable(Some("living-room-tv"), Some("36:93:e6:08:48:d9")));
+        assert!(is_stable(Some("printer"), None));
+    }
+
+    #[test]
+    fn a_nameless_device_with_a_vendor_mac_is_stable() {
+        assert!(is_stable(None, Some("90:48:46:10:3b:7a")));
+    }
+
+    #[test]
+    fn a_nameless_device_with_a_randomised_mac_is_unstable() {
+        assert!(!is_stable(None, Some("36:93:e6:08:48:d9")));
+        assert!(!is_stable(Some("   "), Some("36:93:e6:08:48:d9")));
+    }
+
+    #[test]
+    fn a_device_that_offered_no_signal_at_all_is_unstable() {
+        assert!(!is_stable(None, None));
+    }
 
     #[test]
     fn normalizes_mac_spellings() {

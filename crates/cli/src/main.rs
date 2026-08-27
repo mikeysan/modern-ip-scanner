@@ -288,11 +288,18 @@ fn print_transitions(transitions: &[laninv_core::model::Transition]) {
                 .collect();
             format!(" ({})", parts.join(", "))
         };
+        let kind = if t.unstable_identity {
+            format!("{} · randomised identity", t.kind.as_str())
+        } else {
+            t.kind.as_str().to_string()
+        };
+        println!("  {mark} {} [{kind}]{}", t.device_display, details);
+    }
+    if transitions.iter().any(|t| t.unstable_identity) {
         println!(
-            "  {mark} {} [{}]{}",
-            t.device_display,
-            t.kind.as_str(),
-            details
+            "  note: devices marked \"randomised identity\" change their MAC by design.\n\
+             \x20       laninv cannot follow them across rotations, so it never reports\n\
+             \x20       them gone. Give one a name to make it trackable."
         );
     }
 }

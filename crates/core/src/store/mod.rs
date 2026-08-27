@@ -671,7 +671,8 @@ impl Store {
     pub fn transitions_of_scan(&self, scan_id: i64) -> Result<Vec<Transition>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.kind, t.device_key, t.changes_json,
-                    coalesce(u.name, d.primary_name, t.device_key)
+                    coalesce(u.name, d.primary_name, d.mac, t.device_key),
+                    d.primary_name, d.mac
              FROM transitions t
              LEFT JOIN devices d ON d.key = t.device_key
              LEFT JOIN user_names u ON u.device_key = t.device_key
@@ -691,6 +692,12 @@ impl Store {
                 device_key: r.get(1)?,
                 device_display: r.get(3)?,
                 changes,
+                // Derived rather than stored: a device that later gains a
+                // name becomes identifiable, and old rows should say so.
+                unstable_identity: !crate::identity::is_stable(
+                    r.get::<_, Option<String>>(4)?.as_deref(),
+                    r.get::<_, Option<String>>(5)?.as_deref(),
+                ),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

@@ -48,11 +48,23 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
           ))}
         </ul>
       )}
+      {diff.transitions.some((t) => t.unstable_identity) && (
+        <p className="muted small randomised-note">
+          Devices marked <em>randomised identity</em> change their MAC by design.
+          laninv cannot follow them across rotations, so it never reports them
+          gone. Give one a name to make it trackable.
+        </p>
+      )}
       {diff.transitions.length > 0 && (
         <ul className="transitions">
           {diff.transitions.map((t, i) => (
             <li key={i} className={t.kind}>
               <span className="mark">{MARKS[t.kind]}</span> {t.device_display}
+              {t.unstable_identity && (
+                <span className="badge randomised" title="This device changes its MAC by design. It cannot be followed across rotations, so it is never reported gone. Give it a name to make it trackable.">
+                  randomised identity
+                </span>
+              )}
               {t.changes.length > 0 && (
                 <span className="muted">
                   {" "}

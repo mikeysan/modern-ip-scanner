@@ -151,3 +151,19 @@ table.devices tr.selected { background: var(--bg-hover); outline: 1px solid var(
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 4px 8px;
 }
+
+.badge.randomised {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  background: #3a3320;
+  color: #d9c88a;
+  border: 1px solid #5c4f2a;
+  white-space: nowrap;
+}
+
+.randomised-note {
+  margin: 0.4rem 0 0;
+  line-height: 1.4;
+}

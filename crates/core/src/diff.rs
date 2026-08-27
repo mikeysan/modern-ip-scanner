@@ -74,6 +74,9 @@ pub struct PriorState {
     pub last_hostname: Option<String>,
     pub last_mac: Option<String>,
     pub miss_streak: i64,
+    /// False when this device cannot be re-identified across scans — see
+    /// [`crate::identity::is_stable`]. Absence is unprovable for those.
+    pub identity_stable: bool,
 }
 
 /// The newly observed state of one device.
@@ -84,6 +87,8 @@ pub struct ObservedState {
     pub ip: String,
     pub hostname: Option<String>,
     pub mac: Option<String>,
+    /// False when this device cannot be re-identified across scans.
+    pub identity_stable: bool,
 }
 
 /// Outcome of the diff, including updated miss streaks the store should apply.
@@ -117,6 +122,7 @@ pub fn compute_diff(
                     device_key: obs.device_key.clone(),
                     device_display: obs.display_name.clone(),
                     changes: vec![],
+                    unstable_identity: !obs.identity_stable,
                 });
                 streak_resets.push(obs.device_key.clone());
             }
@@ -147,6 +153,7 @@ pub fn compute_diff(
                         device_key: obs.device_key.clone(),
                         device_display: obs.display_name.clone(),
                         changes,
+                        unstable_identity: !obs.identity_stable,
                     });
                 }
                 // Returning from a long absence: streak had hit grace before.
@@ -156,6 +163,7 @@ pub fn compute_diff(
                         device_key: obs.device_key.clone(),
                         device_display: obs.display_name.clone(),
                         changes: vec![],
+                        unstable_identity: !obs.identity_stable,
                     });
                 }
             }
@@ -173,6 +181,13 @@ pub fn compute_diff(
             // and the miss streak must not advance.
             continue;
         }
+        if !p.identity_stable {
+            // The same rule, one device at a time. This device's identity
+            // changes by design, so "did not answer" cannot be told apart
+            // from "answered under a different address". Suppression is per
+            // device: its stable neighbours are still diffed normally.
+            continue;
+        }
         let new_streak = p.miss_streak + 1;
         streak_updates.push((key.clone(), new_streak));
         if new_streak == grace_scans as i64 {
@@ -181,6 +196,7 @@ pub fn compute_diff(
                 device_key: key.clone(),
                 device_display: p.display_name.clone(),
                 changes: vec![],
+                unstable_identity: false,
             });
         }
     }
@@ -205,6 +221,7 @@ mod tests {
             last_hostname: hostname.map(|s| s.into()),
             last_mac: mac.map(|s| s.into()),
             miss_streak: 0,
+            identity_stable: true,
         }
     }
 
@@ -215,6 +232,7 @@ mod tests {
             ip: ip.into(),
             hostname: hostname.map(|s| s.into()),
             mac: mac.map(|s| s.into()),
+            identity_stable: true,
         }
     }
 
@@ -282,6 +300,83 @@ mod tests {
         assert!(complete.may_prove_absence());
         assert!(!ScanIntegrity::partial("s", "r").may_prove_absence());
         assert!(!ScanIntegrity::uncovered("s", "r").may_prove_absence());
+    }
+
+    #[test]
+    fn an_unstable_identity_is_never_reported_gone() {
+        // A phone with a randomised MAC that stops answering may have left,
+        // or may have come back wearing a different address. We cannot tell,
+        // so we must not claim.
+        let p = map(vec![(
+            "phone".into(),
+            PriorState {
+                miss_streak: 1,
+                identity_stable: false,
+                ..prior("phone", "10.0.0.7", Some("36:93:e6:08:48:d9"), None)
+            },
+        )]);
+        let out = compute_diff(p, &HashMap::new(), &ScanIntegrity::complete(), 2);
+        assert!(
+            !out.transitions
+                .iter()
+                .any(|t| t.kind == TransitionKind::Gone),
+            "a randomised identity must never be reported gone"
+        );
+        assert!(
+            out.streak_updates.is_empty(),
+            "nor may it accrue a miss streak toward gone"
+        );
+    }
+
+    #[test]
+    fn a_stable_neighbour_is_unaffected_by_an_unstable_one() {
+        // Suppression is per device, not per scan.
+        let p = map(vec![
+            (
+                "phone".into(),
+                PriorState {
+                    miss_streak: 1,
+                    identity_stable: false,
+                    ..prior("phone", "10.0.0.7", Some("36:93:e6:08:48:d9"), None)
+                },
+            ),
+            (
+                "nas".into(),
+                PriorState {
+                    miss_streak: 1,
+                    ..prior("nas", "10.0.0.8", Some("90:48:46:10:3b:7a"), None)
+                },
+            ),
+        ]);
+        let out = compute_diff(p, &HashMap::new(), &ScanIntegrity::complete(), 2);
+        let gone: Vec<&str> = out
+            .transitions
+            .iter()
+            .filter(|t| t.kind == TransitionKind::Gone)
+            .map(|t| t.device_key.as_str())
+            .collect();
+        assert_eq!(gone, vec!["nas"]);
+    }
+
+    #[test]
+    fn a_new_transition_records_whether_the_identity_will_hold() {
+        let observed = map(vec![(
+            "phone".into(),
+            ObservedState {
+                identity_stable: false,
+                ..observed("phone", "10.0.0.7", Some("36:93:e6:08:48:d9"), None)
+            },
+        )]);
+        let out = compute_diff(HashMap::new(), &observed, &ScanIntegrity::complete(), 2);
+        let t = out
+            .transitions
+            .iter()
+            .find(|t| t.kind == TransitionKind::New)
+            .expect("new transition");
+        assert!(
+            t.unstable_identity,
+            "the UI has to be able to say why this device will keep reappearing"
+        );
     }
 
     #[test]
