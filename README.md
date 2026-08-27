@@ -15,10 +15,14 @@ user-assigned names** — the feature everything else hangs off.
 - **Unprivileged by default.** Neighbor-cache reads, mDNS/SSDP/NetBIOS probes
   and targeted pings need no elevation. Windows uses the IP Helper API only —
   no pcap, no Npcap, no drivers. Ever.
-- **The integrity rule.** A scan whose privilege state isn't confirmed is
-  marked *partial* and **never reports a device as gone**. `gone` also
-  requires a grace period (default: missed in 2 consecutive complete scans).
-  Enforced in the core (`diff`), so CLI, GUI and export can't disagree.
+- **The integrity rule.** A scan only reports a device *gone* if it could
+  actually have seen it: every enabled strategy finished cleanly **and** the
+  scan demonstrably covered the network (an exhaustive sweep ran, and the
+  gateway answered). Anything less is *partial* — still reporting *new* and
+  *changed*, never *gone*. Plus a grace period, default two scans. Devices
+  with randomised MACs and no name are never reported gone at all, because a
+  rotation is indistinguishable from a departure. Enforced in the core
+  (`diff`), so CLI, GUI and export can't disagree.
 - **Not a security scanner.** No port scanning, no vuln checks, no WoL.
 
 ## Layout
@@ -67,12 +71,12 @@ laninv export [--format csv|json] [--network KEY]
 ## The privileged helper (optional)
 
 Full ARP coverage (every address in the prefix, definitive up/down) needs
-elevation on Linux (`pkexec`/`sudo` + raw socket) and helps on locked-down
-Windows (`SendARP` via UAC-elevated helper serving a named pipe).
+elevation on Linux (`pkexec` + raw socket) and helps on locked-down Windows
+(`SendARP` via a UAC-elevated helper serving a named pipe).
 
 - CLI: `laninv scan --helper`
 - GUI: tick **helper** before scanning (shown when the helper binary is
-  installed next to the app).
+  found; Settings lists every path that is checked).
 
 Without it, everything still works — scans that needed it are marked
 **partial** and "gone" is suppressed for them. On Windows, native `SendARP`
@@ -85,7 +89,7 @@ usually works unprivileged and no helper is needed at all.
 | arp-cache   | none    | none      | MACs for everything the OS knows |
 | ping-sweep  | few     | ICMP echo | liveness for candidate addresses (no range loops) |
 | mdns        | 1 group | none      | hostnames (Apple, cast, printers)|
-| ssdp        | 2 group | none      | USN/vendor (UPnP, IoT, TVs)      |
+| ssdp        | 2 group + 1 HTTP | none | friendly names + vendor (UPnP, IoT, TVs) |
 | netbios     | per-host| none      | hostnames (Windows, Samba)       |
 | arp-ping    | full    | ARP resolve | exhaustive coverage (the only range loop, privileged by design) |
 
