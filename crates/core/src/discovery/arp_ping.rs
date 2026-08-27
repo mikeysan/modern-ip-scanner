@@ -14,7 +14,6 @@ use crate::model::{Capability, Observation};
 pub struct ArpPing;
 
 const MAX_ADDRESSES: usize = 4096;
-const MAX_PARALLEL: usize = 64;
 
 impl Strategy for ArpPing {
     fn id(&self) -> &'static str {
@@ -107,7 +106,7 @@ impl Strategy for ArpPing {
             .collect();
         let ips = std::sync::Arc::new(ips);
         thread::scope(|s| {
-            for _ in 0..MAX_PARALLEL.min(ips.len()) {
+            for _ in 0..ctx.arp_concurrency.max(1).min(ips.len()) {
                 let (tx, ips, next) = (tx.clone(), ips.clone(), next.clone());
                 s.spawn(move || loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

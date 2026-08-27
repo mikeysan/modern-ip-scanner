@@ -107,18 +107,21 @@ unsafe fn parse_adapters(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Interface>
             gateway_v4,
             gateway_mac: None,
             index: a.Anonymous1.Anonymous.IfIndex,
-            kind: if_kind(a.IfType, a.OperStatus == IfOperStatusUp),
+            kind: if_kind(a.IfType),
+            up: a.OperStatus == IfOperStatusUp,
         });
         current = a.Next;
     }
     out
 }
 
-fn if_kind(if_type: u32, _up: bool) -> IfKind {
+/// IANA ifType to our coarse kind.
+fn if_kind(if_type: u32) -> IfKind {
     match if_type {
         6 | 7 | 262 => IfKind::Ethernet, // ethernetCsmacd, iso88023, IPoIB
         71 | 131 => IfKind::Wireless,    // IEEE802.11
-        24 | 53 => IfKind::Virtual,      // softwareLoopback, propVirtual
+        24 => IfKind::Loopback,          // softwareLoopback
+        53 => IfKind::Virtual,           // propVirtual
         _ => IfKind::Other,
     }
 }

@@ -1,4 +1,5 @@
 import type { LastDiff, TransitionKind } from "../types";
+import { fmtTime } from "../api";
 
 const MARKS: Record<TransitionKind, string> = {
   new: "+",
@@ -29,7 +30,7 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
   return (
     <div className={diff.partial ? "diff partial" : "diff"}>
       <div className="diff-summary">
-        <span className="diff-title">Last scan {diff.finished_at_label}</span>
+        <span className="diff-title">Last scan {fmtTime(diff.finished_at)}</span>
         <span className="diff-count">{summary}</span>
         {diff.partial ? (
           <span className="badge partial-badge" title="A partial scan never reports devices as gone">

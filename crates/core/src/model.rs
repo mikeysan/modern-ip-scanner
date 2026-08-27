@@ -23,6 +23,10 @@ pub struct Interface {
     pub index: u32,
     /// Rough kind, used in the network composite key.
     pub kind: IfKind,
+    /// Operationally up. A disconnected adapter keeps its configuration, so
+    /// this is the only thing separating "my network" from "a NIC with a
+    /// stale address".
+    pub up: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

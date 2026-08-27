@@ -5,10 +5,15 @@
 
 use std::io::ErrorKind;
 use std::net::UdpSocket;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{ScanContext, Strategy, StrategyOutcome};
 use crate::model::{NameSource, Observation};
+
+/// How many hosts to probe at once.
+const MAX_PARALLEL: usize = 32;
 
 pub struct Netbios {
     pub per_host_timeout: Duration,
@@ -37,10 +42,11 @@ impl Strategy for Netbios {
         if ctx.candidates.is_empty() {
             return StrategyOutcome::ok(Vec::new());
         }
-        let sock = match UdpSocket::bind("0.0.0.0:0") {
-            Ok(s) => s,
-            Err(e) => return StrategyOutcome::failed(format!("UDP socket unavailable: {e}")),
-        };
+        // One upfront bind so "no UDP sockets at all" is reported as a
+        // problem rather than silently returning nothing.
+        if let Err(e) = UdpSocket::bind("0.0.0.0:0") {
+            return StrategyOutcome::failed(format!("UDP socket unavailable: {e}"));
+        }
         let candidates: Vec<String> = ctx
             .candidates
             .iter()
@@ -48,53 +54,71 @@ impl Strategy for Netbios {
             .take(self.max_candidates)
             .cloned()
             .collect();
+        if candidates.is_empty() {
+            return StrategyOutcome::ok(Vec::new());
+        }
 
-        let mut observations = Vec::new();
-        for ip in candidates {
-            let trnid = (ip_last_octet(&ip) as u16) | 0x4200;
-            let query = build_node_status_request(trnid);
-            let Ok(addr) = format!("{ip}:137").parse::<std::net::SocketAddr>() else {
-                continue;
-            };
-            if sock.send_to(&query, addr).is_err() {
-                continue;
-            }
-            sock.set_read_timeout(Some(self.per_host_timeout)).ok();
-            let deadline = Instant::now() + self.per_host_timeout;
-            let mut answered = false;
-            while Instant::now() < deadline && !answered {
-                let mut buf = [0u8; 1024];
-                match sock.recv_from(&mut buf) {
-                    Ok((n, from)) => {
-                        if from.ip().to_string() != ip {
-                            continue; // stray packet for another candidate
-                        }
-                        if n >= 12 && buf[0] == (trnid >> 8) as u8 && buf[1] == (trnid & 0xff) as u8
-                        {
-                            if let Some(name) = parse_node_status_names(&buf[..n]).first() {
-                                observations.push(Observation {
-                                    ip: ip.clone(),
-                                    mac: None,
-                                    name: Some((NameSource::Netbios, name.clone())),
-                                    vendor: None,
-                                    source: self.id().to_string(),
-                                    confidence: 0.85,
-                                });
-                            }
-                            answered = true;
-                        }
-                    }
-                    Err(e)
-                        if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
-                    {
+        // Probed concurrently: most hosts do not run NBNS at all, so a
+        // sequential walk spends its whole budget waiting out timeouts —
+        // 128 candidates at 900 ms each is nearly two minutes.
+        let timeout = self.per_host_timeout;
+        let (tx, rx) = mpsc::channel::<Observation>();
+        let candidates = std::sync::Arc::new(candidates);
+        let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let id = self.id();
+        thread::scope(|s| {
+            for _ in 0..MAX_PARALLEL.min(candidates.len()) {
+                let (tx, candidates, next) = (tx.clone(), candidates.clone(), next.clone());
+                s.spawn(move || loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if i >= candidates.len() {
                         break;
                     }
-                    Err(_) => break,
+                    let ip = &candidates[i];
+                    if let Some(name) = query_node_status(ip, timeout) {
+                        let _ = tx.send(Observation {
+                            ip: ip.clone(),
+                            mac: None,
+                            name: Some((NameSource::Netbios, name)),
+                            vendor: None,
+                            source: id.to_string(),
+                            confidence: 0.85,
+                        });
+                    }
+                });
+            }
+        });
+        drop(tx);
+        StrategyOutcome::ok(rx.into_iter().collect())
+    }
+}
+
+/// Ask one host for its NetBIOS names. Each caller gets its own socket so
+/// replies cannot be confused between concurrent probes.
+fn query_node_status(ip: &str, timeout: Duration) -> Option<String> {
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.set_read_timeout(Some(timeout)).ok()?;
+    let trnid = (ip_last_octet(ip) as u16) | 0x4200;
+    let addr = format!("{ip}:137").parse::<std::net::SocketAddr>().ok()?;
+    sock.send_to(&build_node_status_request(trnid), addr).ok()?;
+
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let mut buf = [0u8; 1024];
+        match sock.recv_from(&mut buf) {
+            Ok((n, from)) => {
+                if from.ip().to_string() != ip {
+                    continue; // stray packet
+                }
+                if n >= 12 && buf[0] == (trnid >> 8) as u8 && buf[1] == (trnid & 0xff) as u8 {
+                    return parse_node_status_names(&buf[..n]).into_iter().next();
                 }
             }
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => break,
+            Err(_) => break,
         }
-        StrategyOutcome::ok(observations)
     }
+    None
 }
 
 fn ip_last_octet(ip: &str) -> u8 {

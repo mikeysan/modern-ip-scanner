@@ -95,6 +95,7 @@ unsafe fn collect_ifaddrs() -> Option<Vec<Interface>> {
         } else {
             IfKind::Other
         };
+        let up = interface_is_up(&name);
         out.push(Interface {
             name: name.clone(),
             description: None,
@@ -105,9 +106,22 @@ unsafe fn collect_ifaddrs() -> Option<Vec<Interface>> {
             gateway_mac: None,
             index: fnv_index(&name),
             kind,
+            up,
         });
     }
     Some(out)
+}
+
+/// Operational state from sysfs. `lo` is always up; anything we cannot read
+/// is assumed up so a missing sysfs never hides the only usable interface.
+fn interface_is_up(name: &str) -> bool {
+    match std::fs::read_to_string(format!("/sys/class/net/{name}/operstate")) {
+        Ok(state) => {
+            let state = state.trim();
+            state == "up" || state == "unknown"
+        }
+        Err(_) => true,
+    }
 }
 
 fn fnv_index(name: &str) -> u32 {

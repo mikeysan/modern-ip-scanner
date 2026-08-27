@@ -1,7 +1,7 @@
 //! Client side of the optional privileged helper (`laninv-helper`).
 //!
 //! Protocol: newline-delimited JSON, one request and one response per line.
-//! - Linux: helper is spawned via `pkexec`/`sudo` and speaks over stdio.
+//! - Linux: helper is spawned via `pkexec` and speaks over stdio.
 //! - Windows: helper is spawned elevated via `ShellExecuteW(runas)` and
 //!   serves a named pipe the client connects to.
 //!
@@ -60,16 +60,18 @@ impl HelperClient {
     #[cfg(target_os = "linux")]
     fn launch_stdio(path: std::path::PathBuf) -> Result<HelperClient, String> {
         use std::process::{Command, Stdio};
-        let launcher = ["pkexec", "sudo"]
-            .iter()
-            .find(|l| which(l).is_some())
-            .ok_or("neither pkexec nor sudo found")?;
+        // pkexec only. `sudo` reads its password prompt from stdin, which is
+        // the JSON request channel — it would swallow the first request as a
+        // password attempt and then fail.
+        let launcher = which("pkexec").ok_or(
+            "pkexec not found; install polkit, or run laninv as root for full ARP coverage",
+        )?;
         let mut command = Command::new(launcher);
         command.arg(&path).arg("--stdio");
         command.stdin(Stdio::piped()).stdout(Stdio::piped());
         let mut child = command
             .spawn()
-            .map_err(|e| format!("failed to spawn {launcher}: {e}"))?;
+            .map_err(|e| format!("failed to spawn pkexec: {e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
         Ok(HelperClient {

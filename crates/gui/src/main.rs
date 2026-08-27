@@ -28,9 +28,11 @@ fn store_err<E: std::fmt::Display>(e: E) -> String {
 fn get_state(state: SharedState<'_>) -> Result<serde_json::Value, String> {
     let store = state.store.lock().unwrap();
     let networks = store.list_networks().map_err(store_err)?;
-    let privilege = laninv_core::privilege::probe(None);
     let interfaces = laninv_core::netenv::interfaces();
     let iface = laninv_core::netenv::default_interface(&interfaces);
+    // Probing without an interface skips the ARP check entirely on Windows,
+    // so the UI would report a capability set the scanner does not use.
+    let privilege = laninv_core::privilege::probe(iface.as_ref());
     Ok(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "networks": networks.len(),
@@ -42,7 +44,6 @@ fn get_state(state: SharedState<'_>) -> Result<serde_json::Value, String> {
             "kind": i.kind.as_str(),
             "ips": i.ipv4.iter().map(|c| c.addr.clone()).collect::<Vec<String>>(),
         })),
-        "now_label": fmt_time(laninv_core::util::now()),
     }))
 }
 
@@ -132,7 +133,6 @@ fn last_diff(
         "scan_id": scan_id,
         "network": target,
         "finished_at": summary.finished_at,
-        "finished_at_label": fmt_time(summary.finished_at),
         "partial": summary.partial,
         "partial_reasons": summary.partial_reasons,
         "strategies": summary.strategies,

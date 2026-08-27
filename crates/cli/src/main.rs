@@ -129,7 +129,7 @@ fn main() -> Result<()> {
                 );
             } else {
                 println!(
-                    "Diff for network {nk} (scan #{scan_id} at {})",
+                    "Diff for network {nk} (scan #{scan_id} at {} UTC)",
                     fmt_time(at)
                 );
                 // A diff that cannot report `gone` has to say so, or "no
@@ -182,7 +182,7 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&events)?);
             } else {
                 println!(
-                    "history for {} ({})",
+                    "history for {} ({}) — times in UTC",
                     dev_display(&store, &dev.key),
                     short_key(&dev.key)
                 );
@@ -257,7 +257,7 @@ fn print_report(report: &ScanReport) {
     };
     println!("Scan #{} on {title}", report.scan_id);
     println!(
-        "  finished {} · {} strategies · {} devices seen",
+        "  finished {} UTC · {} strategies · {} devices seen",
         fmt_time(report.finished_at),
         report.strategies_run.len(),
         report.devices_seen
@@ -325,7 +325,7 @@ fn print_devices(devices: &[DeviceView]) {
     }
     println!(
         "{:<4} {:<20} {:<15} {:<17} {:<16} {:<16} networks",
-        "id", "name", "ip", "mac", "vendor", "last seen"
+        "id", "name", "ip", "mac", "vendor", "last seen (UTC)"
     );
     for d in devices {
         println!(
@@ -348,7 +348,7 @@ fn print_networks(networks: &[NetworkView]) {
     }
     println!(
         "{:<18} {:<12} {:<18} {:<16} devices",
-        "key", "label", "subnet", "last seen"
+        "key", "label", "subnet", "last seen (UTC)"
     );
     for n in networks {
         println!(

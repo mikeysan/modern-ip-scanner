@@ -384,6 +384,9 @@ pub fn run_scan(
         }
     };
 
+    // Native SendARP is genuinely concurrent; the helper is a single pipe
+    // behind a mutex, so more threads there just queue.
+    let arp_concurrency = if priv_state.helper_connected { 1 } else { 64 };
     let make_ctx = |candidates: Vec<String>| ScanContext {
         iface: iface.clone(),
         candidates,
@@ -392,6 +395,7 @@ pub fn run_scan(
             let arp_of = arp_of.clone();
             move |ip: &str| arp_of(ip)
         })),
+        arp_concurrency,
     };
 
     let wave1_ctx = make_ctx(vec![]);

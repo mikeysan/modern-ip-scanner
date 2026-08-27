@@ -29,6 +29,10 @@ pub struct ScanContext {
     /// When set, resolves an IPv4 address to a MAC using the privileged
     /// helper or a native privileged API. Returns None when unavailable.
     pub arp_resolve: Option<ArpResolver>,
+    /// How many ARP resolutions can genuinely proceed at once. The helper
+    /// protocol is one request at a time behind a mutex, so fanning out to
+    /// dozens of threads there buys nothing and only adds contention.
+    pub arp_concurrency: usize,
 }
 
 impl ScanContext {
@@ -152,6 +156,7 @@ mod tests {
             gateway_mac: None,
             index: 1,
             kind: IfKind::Ethernet,
+            up: true,
         }
     }
 

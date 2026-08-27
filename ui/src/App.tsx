@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, fmtTime, onScanDone, onScanError, onScanProgress } from "./api";
+import { api, onScanDone, onScanError, onScanProgress } from "./api";
 import type { DeviceView, LastDiff, NetworkView, ScanReport } from "./types";
 import DevicesTable from "./components/DevicesTable";
 import DeviceDetail from "./components/DeviceDetail";
@@ -62,7 +62,6 @@ export default function App() {
         scan_id: report.scan_id,
         network: report.network_key,
         finished_at: report.finished_at,
-        finished_at_label: fmtTime(report.finished_at),
         partial: report.partial,
         partial_reasons: report.partial_reasons,
         strategies: report.strategies_run,

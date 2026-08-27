@@ -77,14 +77,12 @@ export interface AppStateInfo {
   capabilities: string[];
   helper_available: boolean;
   interface: { name: string; kind: string; ips: string[] } | null;
-  now_label: string;
 }
 
 export interface LastDiff {
   scan_id: number;
   network: string;
   finished_at: number;
-  finished_at_label: string;
   partial: boolean;
   partial_reasons: PartialReason[];
   strategies: string[];
