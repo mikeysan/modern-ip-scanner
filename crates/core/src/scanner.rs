@@ -1,9 +1,10 @@
 //! Scan orchestration: strategies in waves, identity resolution, diff, commit.
 //!
-//! The integrity rules from docs/design.md are applied here end-to-end: the
+//! The integrity rules from docs/design.md rule 6 are assembled here: the
 //! privilege state is probed, every enabled strategy must have its capability
-//! confirmed *and* complete successfully, and only then may the diff treat
-//! absence as evidence.
+//! confirmed and finish cleanly, *and* the scan must show it actually covered
+//! the network ([`absence_evidence_gap`]). Only when both hold may the diff
+//! treat "not seen" as evidence of absence.
 
 use std::collections::HashMap;
 
@@ -57,6 +58,50 @@ fn absorb_outcome(
         });
     }
     observations.extend(outcome.observations);
+}
+
+/// Decide whether this scan may treat "not seen" as "not there".
+///
+/// Two conditions, both necessary:
+///
+/// 1. At least one strategy with [`Coverage::Exhaustive`] ran cleanly.
+///    Presence-only strategies never hear from devices that stay quiet, so a
+///    scan built only from them proves nothing.
+/// 2. The scan actually saw something it *must* be able to see. The default
+///    gateway is the anchor: on a working link it always answers. If an
+///    exhaustive sweep came back without even the gateway, the link failed —
+///    the network did not empty.
+///
+/// Returns `Some(reason)` when absence cannot be proven.
+fn absence_evidence_gap(
+    exhaustive_ran: &[String],
+    gateway: Option<&str>,
+    observed_ips: &std::collections::BTreeSet<String>,
+) -> Option<PartialReason> {
+    if exhaustive_ran.is_empty() {
+        return Some(PartialReason {
+            strategy: "scan".into(),
+            reason: "no strategy with full address coverage ran, so nothing can be \
+                     reported gone (enable arp-ping, or the privileged helper)"
+                .into(),
+        });
+    }
+    match gateway {
+        Some(gw) if !observed_ips.contains(gw) => Some(PartialReason {
+            strategy: exhaustive_ran.join(", "),
+            reason: format!(
+                "the sweep did not see the gateway {gw}, so the link — not the \
+                 network — is what changed"
+            ),
+        }),
+        None if observed_ips.is_empty() => Some(PartialReason {
+            strategy: exhaustive_ran.join(", "),
+            reason: "the sweep observed nothing at all and there is no gateway to \
+                     confirm the link is up"
+                .into(),
+        }),
+        _ => None,
+    }
 }
 
 pub fn run_scan(
@@ -260,6 +305,23 @@ pub fn run_scan(
 
     // 5. Merge + resolve identity.
     let merged = merge_observations(&all_observations);
+
+    // Which strategies actually earned the right to testify about absence:
+    // exhaustive coverage, ran this scan, and reported no problem.
+    let exhaustive_ran: Vec<String> = strategies
+        .iter()
+        .filter(|s| s.coverage() == crate::discovery::Coverage::Exhaustive)
+        .map(|s| s.id().to_string())
+        .filter(|id| strategies_run.contains(id) && !problems.iter().any(|p| &p.strategy == id))
+        .collect();
+    let observed_ips: std::collections::BTreeSet<String> =
+        merged.iter().flat_map(|d| d.ips.iter().cloned()).collect();
+    let coverage_gap =
+        absence_evidence_gap(&exhaustive_ran, iface.gateway_v4.as_deref(), &observed_ips);
+    if let Some(gap) = &coverage_gap {
+        progress(&format!("cannot report devices gone: {}", gap.reason));
+    }
+
     let mut observed_states: HashMap<String, ObservedState> = HashMap::new();
     for d in &merged {
         let resolution = resolve_identity(store, d, &net_key)?;
@@ -333,16 +395,17 @@ pub fn run_scan(
         })
         .collect();
 
-    let integrity = if problems.is_empty() {
-        ScanIntegrity::complete()
-    } else {
-        ScanIntegrity {
-            complete: false,
-            reasons: problems
-                .iter()
-                .map(|p| (p.strategy.clone(), p.reason.clone()))
-                .collect(),
-        }
+    // Everything that stops this scan short, whether a strategy failed or the
+    // scan simply never covered enough ground to prove absence.
+    let mut partial_reasons = problems.clone();
+    partial_reasons.extend(coverage_gap.clone());
+    let integrity = ScanIntegrity {
+        complete: problems.is_empty(),
+        absence_provable: coverage_gap.is_none(),
+        reasons: partial_reasons
+            .iter()
+            .map(|p| (p.strategy.clone(), p.reason.clone()))
+            .collect(),
     };
     let outcome = compute_diff(prior, &observed_states, &integrity, grace);
 
@@ -352,8 +415,10 @@ pub fn run_scan(
         "devices_seen": observed_states.len(),
         "raw_observations": all_observations.len(),
     });
-    let partial = !integrity.complete;
-    let partial_reasons = problems.clone();
+    // "Partial" is what the user sees, and it must mean exactly "this scan
+    // could not tell you what is gone" — which covers both a failed strategy
+    // and a scan that proved nothing.
+    let partial = !integrity.may_prove_absence();
     let tx = store.begin()?;
     let scan_id = Store::insert_scan(
         &tx,
@@ -492,6 +557,48 @@ mod tests {
             source: "test".into(),
             confidence: 0.9,
         }
+    }
+
+    fn ips(list: &[&str]) -> std::collections::BTreeSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn absence_needs_a_strategy_that_sweeps_every_address() {
+        let gap = absence_evidence_gap(&[], Some("192.168.1.254"), &ips(&["192.168.1.254"]));
+        assert!(
+            gap.is_some(),
+            "presence-only strategies cannot prove a device is gone"
+        );
+    }
+
+    #[test]
+    fn absence_needs_the_gateway_to_have_answered() {
+        // The classic false-gone: Wi-Fi drops mid-scan, the sweep completes
+        // with zero replies, and every device looks gone.
+        let gap = absence_evidence_gap(&["arp-ping".into()], Some("192.168.1.254"), &ips(&[]));
+        assert!(
+            gap.is_some(),
+            "a sweep that could not even reach the gateway proves nothing"
+        );
+    }
+
+    #[test]
+    fn a_covered_scan_has_no_evidence_gap() {
+        let gap = absence_evidence_gap(
+            &["arp-ping".into()],
+            Some("192.168.1.254"),
+            &ips(&["192.168.1.254", "192.168.1.5"]),
+        );
+        assert!(gap.is_none());
+    }
+
+    #[test]
+    fn without_a_gateway_seeing_anything_at_all_is_the_anchor() {
+        // An isolated segment has no gateway; fall back to "the sweep saw
+        // something", which still rules out a dead link.
+        assert!(absence_evidence_gap(&["arp-ping".into()], None, &ips(&[])).is_some());
+        assert!(absence_evidence_gap(&["arp-ping".into()], None, &ips(&["10.0.0.9"])).is_none());
     }
 
     #[test]

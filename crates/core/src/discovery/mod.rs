@@ -61,12 +61,30 @@ impl StrategyOutcome {
     }
 }
 
+/// What a strategy's *silence* about an address means.
+///
+/// Only a strategy that probes every address in the prefix can turn "did not
+/// answer" into evidence of absence. Everything else confirms presence and
+/// says nothing at all about the devices it did not hear from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    /// Probes the whole prefix: not seeing an address is evidence.
+    Exhaustive,
+    /// Only ever confirms presence; silence carries no information.
+    PresenceOnly,
+}
+
 pub trait Strategy: Send + Sync {
     /// Stable id used in settings and the `scans.strategies` record.
     fn id(&self) -> &'static str;
 
     fn requires(&self) -> Capability {
         Capability::NeighborCache
+    }
+
+    /// Whether this strategy's silence is evidence of absence.
+    fn coverage(&self) -> Coverage {
+        Coverage::PresenceOnly
     }
 
     /// Which wave this strategy runs in (1 = parallel starters, 2 = needs
@@ -134,6 +152,19 @@ mod tests {
             gateway_mac: None,
             index: 1,
             kind: IfKind::Ethernet,
+        }
+    }
+
+    #[test]
+    fn only_an_exhaustive_sweep_can_testify_to_absence() {
+        // A scan built solely from presence-only strategies must never be
+        // allowed to conclude a device is gone.
+        for s in registry() {
+            let expected = match s.id() {
+                "arp-ping" => Coverage::Exhaustive,
+                _ => Coverage::PresenceOnly,
+            };
+            assert_eq!(s.coverage(), expected, "strategy {}", s.id());
         }
     }
 

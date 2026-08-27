@@ -1,37 +1,67 @@
 //! Scan-vs-inventory diff engine.
 //!
 //! This is where the product's core trust property lives (docs/design.md
-//! rule 6): a scan whose privilege state was not confirmed — or which did not
-//! complete — is *partial* and may never emit a `gone` transition, nor advance
-//! a device's miss streak. `gone` requires a complete scan plus the device
-//! having been missed for `grace_scans` consecutive *complete* scans.
+//! rule 6): a scan may only call a device `gone` when it could actually have
+//! seen it. That needs two things — the scan finished without a strategy
+//! failing (`complete`), and it demonstrably covered the network
+//! (`absence_provable`). A scan missing either is *partial*: it may emit
+//! `new` and `changed`, because seeing a device proves it is there, but it
+//! may never emit `gone` nor advance a miss streak. `gone` further requires
+//! the device to have been missed for `grace_scans` consecutive such scans.
 
 use std::collections::HashMap;
 
 use crate::model::{FieldChange, Transition, TransitionKind};
 
-/// How complete a scan was; produced by the scanner from strategy results and
-/// the privilege probe.
+/// How complete a scan was; produced by the scanner from strategy results, the
+/// privilege probe, and what the scan actually managed to observe.
 #[derive(Debug, Clone)]
 pub struct ScanIntegrity {
     /// All enabled strategies had their privilege confirmed and finished.
     pub complete: bool,
+    /// The scan demonstrably covered the network, so "not seen" is real
+    /// evidence of absence.
+    ///
+    /// Separate from `complete` because a scan can finish without a single
+    /// error and still prove nothing: a strategy that only ever confirms
+    /// presence (mDNS, SSDP, NetBIOS) is silent about devices that simply did
+    /// not answer, and an exhaustive sweep that saw *nothing at all* means the
+    /// link failed, not that the network emptied.
+    pub absence_provable: bool,
     pub reasons: Vec<(String, String)>,
 }
 
 impl ScanIntegrity {
+    /// A scan that finished cleanly and covered the network.
     pub fn complete() -> ScanIntegrity {
         ScanIntegrity {
             complete: true,
+            absence_provable: true,
             reasons: Vec::new(),
         }
     }
 
+    /// A scan where a strategy could not do its job.
     pub fn partial(strategy: &str, reason: &str) -> ScanIntegrity {
         ScanIntegrity {
             complete: false,
+            absence_provable: true,
             reasons: vec![(strategy.to_string(), reason.to_string())],
         }
+    }
+
+    /// A scan that finished cleanly but cannot testify to absence.
+    pub fn uncovered(strategy: &str, reason: &str) -> ScanIntegrity {
+        ScanIntegrity {
+            complete: true,
+            absence_provable: false,
+            reasons: vec![(strategy.to_string(), reason.to_string())],
+        }
+    }
+
+    /// True when this scan may emit `gone` and advance miss streaks.
+    pub fn may_prove_absence(&self) -> bool {
+        self.complete && self.absence_provable
     }
 }
 
@@ -142,9 +172,10 @@ pub fn compute_diff(
         if observed.contains_key(key) {
             continue;
         }
-        if !integrity.complete {
-            // Integrity rule: an incomplete scan is *no evidence of absence*.
-            // No `gone`, and the miss streak must not advance.
+        if !integrity.may_prove_absence() {
+            // Integrity rule: a scan that did not finish, or that never
+            // covered the network, is *no evidence of absence*. No `gone`,
+            // and the miss streak must not advance.
             continue;
         }
         let new_streak = p.miss_streak + 1;
@@ -194,6 +225,68 @@ mod tests {
 
     fn map<V>(entries: Vec<(String, V)>) -> HashMap<String, V> {
         entries.into_iter().collect()
+    }
+
+    #[test]
+    fn a_scan_that_cannot_prove_absence_never_emits_gone() {
+        // Every strategy succeeded, but none of them can testify to absence:
+        // mDNS hearing nothing means nothing. Observed live: `laninv scan
+        // --strategy mdns` returned zero observations and reported a complete
+        // scan, which would have marked the whole inventory gone.
+        let prior = map(vec![(
+            "a".into(),
+            prior("a", "10.0.0.1", Some("aa:aa:aa:aa:aa:aa"), Some("host-a")),
+        )]);
+        let observed: HashMap<String, ObservedState> = HashMap::new();
+        let integrity = ScanIntegrity::uncovered("scan", "no exhaustive strategy ran");
+        let out = compute_diff(prior, &observed, &integrity, 2);
+        assert!(
+            !out.transitions
+                .iter()
+                .any(|t| t.kind == TransitionKind::Gone),
+            "a scan with no coverage must not report anything gone"
+        );
+        assert!(
+            out.streak_updates.is_empty(),
+            "nor may it advance a miss streak toward gone"
+        );
+    }
+
+    #[test]
+    fn an_uncovered_scan_still_reports_new_and_changed() {
+        // Presence is still evidence: seeing a device proves it is there.
+        let prior_map = map(vec![(
+            "a".into(),
+            prior("a", "10.0.0.1", Some("aa:aa:aa:aa:aa:aa"), Some("host-a")),
+        )]);
+        let observed = map(vec![
+            (
+                "a".into(),
+                observed("a", "10.0.0.9", Some("aa:aa:aa:aa:aa:aa"), Some("host-a")),
+            ),
+            (
+                "b".into(),
+                observed("b", "10.0.0.2", Some("bb:bb:bb:bb:bb:bb"), None),
+            ),
+        ]);
+        let integrity = ScanIntegrity::uncovered("scan", "gateway not seen");
+        let out = compute_diff(prior_map, &observed, &integrity, 2);
+        assert!(out
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::New));
+        assert!(out
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Changed));
+    }
+
+    #[test]
+    fn coverage_and_completeness_are_independent_gates() {
+        let complete = ScanIntegrity::complete();
+        assert!(complete.may_prove_absence());
+        assert!(!ScanIntegrity::partial("s", "r").may_prove_absence());
+        assert!(!ScanIntegrity::uncovered("s", "r").may_prove_absence());
     }
 
     #[test]

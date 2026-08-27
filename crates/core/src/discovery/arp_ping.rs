@@ -25,6 +25,12 @@ impl Strategy for ArpPing {
         Capability::ArpResolve
     }
 
+    /// The only strategy that probes every address, so the only one whose
+    /// silence about an address is evidence that nothing is there.
+    fn coverage(&self) -> super::Coverage {
+        super::Coverage::Exhaustive
+    }
+
     fn wave(&self) -> u8 {
         3
     }
