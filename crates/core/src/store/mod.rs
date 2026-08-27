@@ -7,7 +7,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 
 use crate::model::{
-    DeviceView, FieldChange, HistoryEvent, NetworkView, PartialReason, Transition, TransitionKind,
+    DeviceStatus, DeviceView, FieldChange, HistoryEvent, NetworkView, PartialReason, Transition,
+    TransitionKind,
 };
 use crate::util::now;
 
@@ -769,10 +770,45 @@ impl Store {
 
     // ----- listing / history -----
 
+    /// What the most recent scan of `network_key` said about each device, so
+    /// the device list can show standing without the caller re-deriving it.
+    fn latest_statuses(
+        &self,
+        network_key: &str,
+    ) -> std::collections::HashMap<String, DeviceStatus> {
+        let mut out = std::collections::HashMap::new();
+        let Ok(Some((scan_id, _))) = self.last_scan_for_network(network_key) else {
+            return out;
+        };
+        if let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT device_key, kind FROM transitions WHERE scan_id = ?1")
+        {
+            if let Ok(rows) = stmt.query_map([scan_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            }) {
+                for (key, kind) in rows.flatten() {
+                    let status = match kind.as_str() {
+                        "new" => DeviceStatus::New,
+                        "changed" => DeviceStatus::Changed,
+                        "gone" => DeviceStatus::Gone,
+                        _ => continue, // `returned` is presence, not standing
+                    };
+                    out.insert(key, status);
+                }
+            }
+        }
+        out
+    }
+
     pub fn list_devices(&self, network_key: Option<&str>) -> Result<Vec<DeviceView>> {
+        let statuses = network_key
+            .map(|nk| self.latest_statuses(nk))
+            .unwrap_or_default();
         let sql = "SELECT d.id, d.key, d.primary_name, d.mac, d.vendor, d.first_seen, d.last_seen,
                           u.name, u.notes,
-                          (SELECT group_concat(p.network_key) FROM presence p WHERE p.device_key = d.key)
+                          (SELECT group_concat(p.network_key) FROM presence p WHERE p.device_key = d.key),
+                          (SELECT max(p.reported_gone) FROM presence p WHERE p.device_key = d.key)
                    FROM devices d LEFT JOIN user_names u ON u.device_key = d.key";
         let make_view = |r: &Row<'_>| -> rusqlite::Result<DeviceView> {
             let primary_name: Option<String> = r.get(2)?;
@@ -787,9 +823,18 @@ impl Store {
                 .or_else(|| primary_name.clone())
                 .or_else(|| mac.clone())
                 .unwrap_or_else(|| "?".into());
+            let key: String = r.get(1)?;
+            let identity_stable =
+                crate::identity::is_stable(primary_name.as_deref(), mac.as_deref());
+            let announced_gone = r.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0;
+            let status = statuses.get(&key).copied().unwrap_or(if announced_gone {
+                DeviceStatus::Gone
+            } else {
+                DeviceStatus::Known
+            });
             Ok(DeviceView {
                 id: r.get(0)?,
-                key: r.get(1)?,
+                key,
                 user_name,
                 primary_name,
                 display_name,
@@ -800,6 +845,8 @@ impl Store {
                 last_ip: None,
                 networks,
                 notes: r.get(8)?,
+                status,
+                identity_stable,
             })
         };
         match network_key {
@@ -1087,6 +1134,70 @@ mod tests {
             .find_device_by_name_on_network("laptop", "netB")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn a_device_carries_its_standing_from_the_latest_scan() {
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        store
+            .upsert_device("k1", Some("nas"), Some("aa:bb:cc:00:00:01"), None, "net1")
+            .unwrap();
+        store
+            .upsert_presence("k1", "net1", Some("10.0.0.5"))
+            .unwrap();
+        store
+            .upsert_device("k2", Some("tv"), Some("aa:bb:cc:00:00:02"), None, "net1")
+            .unwrap();
+        store
+            .upsert_presence("k2", "net1", Some("10.0.0.6"))
+            .unwrap();
+
+        // Unremarkable until a scan says otherwise.
+        let before = store.list_devices(Some("net1")).unwrap();
+        assert!(before.iter().all(|d| d.status == DeviceStatus::Known));
+
+        let tx = store.begin().unwrap();
+        let scan = Store::insert_scan(&tx, 1, 2, "net1", false, "{}", "[]", &[], "{}").unwrap();
+        Store::insert_transition(&tx, scan, 2, "k1", "net1", TransitionKind::New, &[]).unwrap();
+        Store::insert_transition(&tx, scan, 2, "k2", "net1", TransitionKind::Changed, &[]).unwrap();
+        tx.commit().unwrap();
+
+        let after = store.list_devices(Some("net1")).unwrap();
+        let status = |key: &str| {
+            after
+                .iter()
+                .find(|d| d.key == key)
+                .map(|d| d.status)
+                .unwrap()
+        };
+        assert_eq!(status("k1"), DeviceStatus::New);
+        assert_eq!(status("k2"), DeviceStatus::Changed);
+    }
+
+    #[test]
+    fn a_device_announced_gone_stays_gone_in_later_scans() {
+        // The `gone` transition lives only in the scan that announced it; the
+        // standing has to outlive that scan.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        store
+            .upsert_device("k1", Some("nas"), Some("aa:bb:cc:00:00:01"), None, "net1")
+            .unwrap();
+        store
+            .upsert_presence("k1", "net1", Some("10.0.0.5"))
+            .unwrap();
+        let tx = store.begin().unwrap();
+        Store::mark_reported_gone_tx(&tx, "k1", "net1").unwrap();
+        Store::insert_scan(&tx, 3, 4, "net1", false, "{}", "[]", &[], "{}").unwrap();
+        tx.commit().unwrap();
+
+        let devices = store.list_devices(Some("net1")).unwrap();
+        assert_eq!(devices[0].status, DeviceStatus::Gone);
     }
 
     #[test]

@@ -94,8 +94,12 @@ rewrite.
 
 ## Status / notes
 
-- Timestamps are displayed in UTC (`YYYY-MM-DD HH:MM`) by the CLI, and in
-  local time by the GUI. They should agree; they do not yet.
+- The CLI prints timestamps in UTC and labels them so; the GUI formats in the
+  viewer's local time. There is no timezone database in the core.
+- Packaging is not configured: `bundle.active` is false, so there is no
+  installer and nothing ships the optional helper. Build it with
+  `cargo build -p laninv-helper` and put it beside the app, or point
+  `LANINV_HELPER` at it — the Settings panel lists every path that is checked.
 - The Linux code paths (getifaddrs, `/proc/net/arp`, dgram ICMP, raw-ARP
   helper) **compile and are covered by CI**, and the helper's ARP wire format
   and routing logic are unit-tested on every platform. They have still never

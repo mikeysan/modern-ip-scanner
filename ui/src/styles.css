@@ -167,3 +167,107 @@ table.devices tr.selected { background: var(--bg-hover); outline: 1px solid var(
   margin: 0.4rem 0 0;
   line-height: 1.4;
 }
+
+.devices-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.1rem 0.6rem;
+}
+
+.table-toolbar .filter {
+  flex: 1 1 auto;
+  max-width: 26rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid #333;
+  background: #191919;
+  color: inherit;
+  font: inherit;
+}
+
+.table-toolbar .filter:focus {
+  outline: none;
+  border-color: #5a7ea3;
+}
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+th.sortable:hover {
+  color: #cfd6dd;
+}
+
+th.sortable.active {
+  color: #dfe6ee;
+}
+
+.sort-arrow {
+  margin-left: 0.3rem;
+  font-size: 0.65rem;
+  opacity: 0.75;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.chip + .chip {
+  margin-left: 0.3rem;
+}
+
+.chip.status-new {
+  background: #16301d;
+  color: #8fd6a3;
+  border-color: #2c5c39;
+}
+
+.chip.status-changed {
+  background: #2c2a16;
+  color: #d8cf85;
+  border-color: #55501f;
+}
+
+.chip.status-gone {
+  background: #331b1b;
+  color: #d99a9a;
+  border-color: #5c2e2e;
+}
+
+.chip.status-known {
+  background: #202225;
+  color: #98a2ad;
+  border-color: #35393e;
+}
+
+.chip.randomised {
+  background: #3a3320;
+  color: #d9c88a;
+  border-color: #5c4f2a;
+}
+
+.paths {
+  margin: 0.3rem 0 0.5rem;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  color: #98a2ad;
+}
+
+.paths code {
+  font-size: 0.78rem;
+}

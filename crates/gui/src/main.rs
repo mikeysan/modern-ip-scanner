@@ -39,6 +39,10 @@ fn get_state(state: SharedState<'_>) -> Result<serde_json::Value, String> {
         "devices": store.list_devices(None).map_err(store_err)?.len(),
         "capabilities": privilege.capabilities.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
         "helper_available": laninv_core::privilege::helper_path().is_some(),
+        "helper_search_paths": laninv_core::privilege::helper_search_paths()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>(),
         "interface": iface.as_ref().map(|i| serde_json::json!({
             "name": i.name,
             "kind": i.kind.as_str(),

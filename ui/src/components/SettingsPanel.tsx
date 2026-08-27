@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Settings } from "../types";
+import type { AppStateInfo, Settings } from "../types";
 
 const ALL_STRATEGIES = [
   { id: "arp-cache", label: "ARP/neighbor cache", note: "zero packets, always on" },
@@ -16,8 +16,10 @@ export default function SettingsPanel() {
   const [grace, setGrace] = useState(2);
   const [enabled, setEnabled] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
+  const [state, setState] = useState<AppStateInfo | null>(null);
 
   useEffect(() => {
+    api.getState().then(setState).catch(() => undefined);
     api.getSettings().then((s) => {
       setSettings(s);
       setGrace(s.grace_scans);
@@ -80,6 +82,37 @@ export default function SettingsPanel() {
           />
           consecutive complete scans.
         </label>
+      </section>
+      <section>
+        <h3>Privileged helper</h3>
+        {state?.helper_available ? (
+          <p className="muted small">
+            Installed. Tick <em>helper</em> before scanning for full ARP
+            coverage; laninv never requires it.
+          </p>
+        ) : (
+          <>
+            <p className="muted small">
+              Not installed. Full ARP coverage needs elevation on Linux, and
+              without it no scan can report a device <em>gone</em>. On Windows
+              native SendARP usually works and the helper is not needed.
+            </p>
+            <p className="muted small">
+              Build it with <code>cargo build -p laninv-helper</code> and put
+              the binary in one of:
+            </p>
+            <ul className="paths">
+              {(state?.helper_search_paths ?? []).map((p) => (
+                <li key={p}>
+                  <code>{p}</code>
+                </li>
+              ))}
+            </ul>
+            <p className="muted small">
+              Or point <code>LANINV_HELPER</code> at it directly.
+            </p>
+          </>
+        )}
       </section>
       <button className="scan-btn" onClick={save}>
         {saved ? "Saved ✓" : "Save settings"}

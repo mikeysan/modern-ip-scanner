@@ -324,20 +324,31 @@ fn print_devices(devices: &[DeviceView]) {
         return;
     }
     println!(
-        "{:<4} {:<20} {:<15} {:<17} {:<16} {:<16} networks",
-        "id", "name", "ip", "mac", "vendor", "last seen (UTC)"
+        "{:<4} {:<8} {:<20} {:<15} {:<17} {:<14} {:<16} networks",
+        "id", "status", "name", "ip", "mac", "vendor", "last seen (UTC)"
     );
     for d in devices {
+        // A randomised identity is worth flagging here too: it explains why
+        // such a device is never reported gone.
+        let status = if d.identity_stable {
+            d.status.as_str().to_string()
+        } else {
+            format!("{}*", d.status.as_str())
+        };
         println!(
-            "{:<4} {:<20} {:<15} {:<17} {:<16} {:<16} {}",
+            "{:<4} {:<8} {:<20} {:<15} {:<17} {:<14} {:<16} {}",
             d.id,
+            status,
             truncate(&d.display_name, 20),
             d.last_ip.as_deref().unwrap_or("-"),
             d.mac.as_deref().unwrap_or("-"),
-            truncate(d.vendor.as_deref().unwrap_or("-"), 16),
+            truncate(d.vendor.as_deref().unwrap_or("-"), 14),
             fmt_time(d.last_seen),
             d.networks.len()
         );
+    }
+    if devices.iter().any(|d| !d.identity_stable) {
+        println!("  * randomised identity: cannot be followed across MAC rotations");
     }
 }
 

@@ -71,6 +71,18 @@ pub fn is_stable(primary_name: Option<&str>, mac: Option<&str>) -> bool {
     mac.is_some_and(|m| normalize_mac(m).is_some() && !is_locally_administered(m))
 }
 
+/// True when a "name" is really a machine identifier — a UUID or a long hex
+/// blob — rather than something a person chose.
+///
+/// Chromecast-family devices (including the TVs that embed it) publish their
+/// mDNS hostname as `<uuid>.local`, which is stable and useless to read. The
+/// same device usually advertises a real name over SSDP, so this lets the
+/// merge prefer the readable one.
+pub fn looks_like_identifier(name: &str) -> bool {
+    let compact: String = name.chars().filter(|c| *c != '-' && *c != '_').collect();
+    compact.len() >= 24 && compact.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn hash_key(parts: &[&str]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"laninv-v1\x00");
@@ -117,6 +129,29 @@ pub fn device_key(primary_name: Option<&str>, mac: Option<&str>, origin_network:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_uuid_hostname_is_an_identifier_not_a_name() {
+        // What a Chromecast-embedded TV publishes over mDNS.
+        assert!(looks_like_identifier(
+            "705c66d2-019a-264d-4b6d-8e2f1a2b3c4d"
+        ));
+        assert!(looks_like_identifier("705c66d2019a264d4b6d8e2f1a2b3c4d"));
+    }
+
+    #[test]
+    fn names_people_chose_are_not_identifiers() {
+        for name in [
+            "area boys",
+            "BT HomeHub6DX",
+            "chromecast-hq",
+            "DESKTOP-ABC123",
+            "printer",
+            "deadbeefcafe", // hex, but too short to be an identifier
+        ] {
+            assert!(!looks_like_identifier(name), "{name} is a name");
+        }
+    }
 
     #[test]
     fn the_locally_administered_bit_marks_a_randomised_mac() {

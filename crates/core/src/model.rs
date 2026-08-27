@@ -229,6 +229,31 @@ pub struct ScanReport {
     pub interface: Option<Interface>,
 }
 
+/// Where a device stands as of the most recent scan of a network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceStatus {
+    /// First seen in the latest scan.
+    New,
+    /// Seen in the latest scan, with a field that differs from before.
+    Changed,
+    /// Absent long enough to have been announced gone.
+    Gone,
+    /// Present and unremarkable — the state most of an inventory is in.
+    Known,
+}
+
+impl DeviceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeviceStatus::New => "new",
+            DeviceStatus::Changed => "changed",
+            DeviceStatus::Gone => "gone",
+            DeviceStatus::Known => "known",
+        }
+    }
+}
+
 /// Device row as exposed to CLI/GUI (joined with user name and presence).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceView {
@@ -249,6 +274,10 @@ pub struct DeviceView {
     /// Networks this device has been seen on (keys).
     pub networks: Vec<String>,
     pub notes: Option<String>,
+    /// Standing as of the network's most recent scan.
+    pub status: DeviceStatus,
+    /// False when this device cannot be re-identified across scans.
+    pub identity_stable: bool,
 }
 
 /// Network row as exposed to CLI/GUI.

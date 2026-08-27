@@ -11,15 +11,26 @@
 use std::io::{BufRead, BufReader, Write};
 use std::time::Duration;
 
+/// How long to wait for the elevated helper's pipe to appear (Windows only:
+/// the Linux launcher gets its pipes from the child process directly).
+#[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+/// The helper's own ARP wait is one second, so anything beyond this means it
+/// has wedged rather than that the address is quiet.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct HelperClient {
     #[cfg(target_os = "linux")]
     child: std::process::Child,
+    /// Raw fd of the child's stdout, for readiness polling.
+    #[cfg(target_os = "linux")]
+    stdout_fd: std::os::fd::RawFd,
     writer: Box<dyn Write + Send>,
     reader: Box<dyn BufRead + Send>,
     #[cfg(windows)]
     _pipe: PipeHandle,
+    /// Set once the helper stops answering; every later request fails fast.
+    dead: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -74,10 +85,13 @@ impl HelperClient {
             .map_err(|e| format!("failed to spawn pkexec: {e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
+        let stdout_fd = std::os::fd::AsRawFd::as_raw_fd(&stdout);
         Ok(HelperClient {
             child,
+            stdout_fd,
             writer: Box::new(stdin),
             reader: Box::new(BufReader::new(stdout)),
+            dead: false,
         })
     }
 
@@ -144,6 +158,7 @@ impl HelperClient {
                     writer: Box::new(PipeWriter(pipe.clone())),
                     reader: Box::new(BufReader::new(PipeReader(pipe.clone()))),
                     _pipe: pipe,
+                    dead: false,
                 });
             }
             if std::time::Instant::now() >= deadline {
@@ -179,17 +194,24 @@ impl HelperClient {
     }
 
     fn roundtrip(&mut self, line: &str) -> Result<Option<String>, String> {
+        if self.dead {
+            return Err("helper is no longer usable".into());
+        }
         writeln!(self.writer, "{line}").map_err(|e| format!("helper write failed: {e}"))?;
         self.writer
             .flush()
             .map_err(|e| format!("helper flush failed: {e}"))?;
-        let mut response = String::new();
-        // The helper always answers or exits; process/pipe exit unblocks the
-        // read with EOF rather than hanging forever.
-        self.reader
-            .read_line(&mut response)
-            .map_err(|e| format!("helper read failed: {e}"))?;
+        let response = match self.read_line_before(std::time::Instant::now() + REQUEST_TIMEOUT) {
+            Ok(r) => r,
+            Err(e) => {
+                // A helper that stopped answering will not start again, and a
+                // caller looping over 4096 addresses must not wait on each.
+                self.dead = true;
+                return Err(e);
+            }
+        };
         if response.trim().is_empty() {
+            self.dead = true;
             return Err("helper closed the connection".into());
         }
         let resp: Resp =
@@ -198,6 +220,80 @@ impl HelperClient {
             return Err(resp.error.unwrap_or_else(|| "helper error".into()));
         }
         Ok(resp.mac)
+    }
+}
+
+impl HelperClient {
+    /// Read one newline-terminated reply, giving up at `deadline`.
+    ///
+    /// Deliberately built from a platform-independent loop plus one tiny
+    /// per-platform "is a byte ready?" primitive, so the timeout logic itself
+    /// is checked by every build.
+    fn read_line_before(&mut self, deadline: std::time::Instant) -> Result<String, String> {
+        let mut line = Vec::new();
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err("helper did not answer in time".into());
+            }
+            if !self.readable(Duration::from_millis(50))? {
+                continue;
+            }
+            let mut byte = [0u8; 1];
+            match std::io::Read::read(&mut self.reader, &mut byte) {
+                Ok(0) => return Err("helper closed the connection".into()),
+                Ok(_) => {
+                    if byte[0] == b'\n' {
+                        return String::from_utf8(line)
+                            .map_err(|_| "helper sent invalid UTF-8".to_string());
+                    }
+                    line.push(byte[0]);
+                }
+                Err(e) => return Err(format!("helper read failed: {e}")),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl HelperClient {
+    /// Wait for readability on the child's stdout.
+    fn readable(&mut self, wait: Duration) -> Result<bool, String> {
+        let mut pollfd = libc::pollfd {
+            fd: self.stdout_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pollfd, 1, wait.as_millis() as libc::c_int) };
+        if rc < 0 {
+            return Err("poll on helper stdout failed".into());
+        }
+        Ok(rc > 0)
+    }
+}
+
+#[cfg(windows)]
+impl HelperClient {
+    /// Ask the pipe whether a byte is waiting, rather than blocking on it.
+    fn readable(&mut self, wait: Duration) -> Result<bool, String> {
+        use windows::Win32::System::Pipes::PeekNamedPipe;
+        let mut available: u32 = 0;
+        let ok =
+            unsafe { PeekNamedPipe(self._pipe.raw(), None, 0, None, Some(&mut available), None) };
+        if ok.is_err() {
+            return Err("helper pipe closed".into());
+        }
+        if available > 0 {
+            return Ok(true);
+        }
+        std::thread::sleep(wait);
+        Ok(false)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+impl HelperClient {
+    fn readable(&mut self, _wait: Duration) -> Result<bool, String> {
+        Ok(true)
     }
 }
 

@@ -53,6 +53,8 @@ pub fn probe(iface: Option<&crate::model::Interface>) -> PrivilegeState {
     }
     #[cfg(target_os = "linux")]
     {
+        // The interface only matters to the Windows SendARP probe.
+        let _ = iface;
         if crate::discovery::ping::raw_socket_capability() {
             state.capabilities.push(Capability::ArpResolve);
         } else {
@@ -65,17 +67,55 @@ pub fn probe(iface: Option<&crate::model::Interface>) -> PrivilegeState {
     state
 }
 
-/// Try to locate the helper binary next to the current executable.
-pub fn helper_path() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let name = if cfg!(windows) {
+/// Platform file name of the helper binary.
+pub fn helper_file_name() -> &'static str {
+    if cfg!(windows) {
         "laninv-helper.exe"
     } else {
         "laninv-helper"
-    };
-    let p = dir.join(name);
-    p.exists().then_some(p)
+    }
+}
+
+/// Every place the helper is looked for, in order, given the directory
+/// holding the current executable and an optional explicit override.
+///
+/// Split out from the environment so the ordering is testable: "why is my
+/// helper not found?" should be answerable without guessing.
+fn search_paths_from(
+    exe_dir: Option<&std::path::Path>,
+    override_path: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(p) = override_path {
+        paths.push(p.to_path_buf());
+    }
+    if let Some(dir) = exe_dir {
+        paths.push(dir.join(helper_file_name()));
+    }
+    if cfg!(not(windows)) {
+        for dir in ["/usr/libexec/laninv", "/usr/lib/laninv", "/usr/local/bin"] {
+            paths.push(std::path::Path::new(dir).join(helper_file_name()));
+        }
+    }
+    paths.dedup();
+    paths
+}
+
+/// Every place the helper is looked for on this machine, in order. Exposed so
+/// the UI can tell the user where to put it rather than only that it is
+/// missing.
+pub fn helper_search_paths() -> Vec<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok();
+    let override_path = std::env::var_os("LANINV_HELPER").map(std::path::PathBuf::from);
+    search_paths_from(
+        exe.as_deref().and_then(|e| e.parent()),
+        override_path.as_deref(),
+    )
+}
+
+/// Locate the helper binary, or None if it is not installed.
+pub fn helper_path() -> Option<std::path::PathBuf> {
+    helper_search_paths().into_iter().find(|p| p.exists())
 }
 
 /// Convenience: read the neighbor table filtered to one interface's subnets.
@@ -84,4 +124,35 @@ pub fn neighbors_for(iface: &crate::model::Interface) -> Vec<crate::model::Neigh
         .into_iter()
         .filter(|e| crate::util::ipv4_in_network_of(&e.ip, iface))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn an_explicit_override_is_searched_first() {
+        let paths = search_paths_from(
+            Some(Path::new("/opt/app")),
+            Some(Path::new("/tmp/my-helper")),
+        );
+        assert_eq!(paths.first().unwrap(), Path::new("/tmp/my-helper"));
+    }
+
+    #[test]
+    fn the_directory_beside_the_executable_is_searched() {
+        let paths = search_paths_from(Some(Path::new("/opt/app")), None);
+        assert!(paths.contains(&Path::new("/opt/app").join(helper_file_name())));
+    }
+
+    #[test]
+    fn searching_still_works_without_a_known_executable_path() {
+        // current_exe() can fail; that must not leave zero candidates on
+        // platforms with system locations.
+        let paths = search_paths_from(None, None);
+        if cfg!(not(windows)) {
+            assert!(!paths.is_empty());
+        }
+    }
 }

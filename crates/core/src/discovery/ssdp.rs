@@ -174,8 +174,11 @@ fn fetch_friendly_name(location: &str) -> Option<String> {
     let mut stream = std::net::TcpStream::connect_timeout(&addr, DESC_TIMEOUT).ok()?;
     stream.set_read_timeout(Some(DESC_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(DESC_TIMEOUT)).ok()?;
+    // HTTP/1.1, not 1.0: Chromecast-family device servers (including the TVs
+    // that embed it) simply never answer a 1.0 request. `Connection: close`
+    // keeps read-to-EOF working without needing to parse Content-Length.
     let request = format!(
-        "GET {path} HTTP/1.0\r\nHost: {authority}\r\nConnection: close\r\nUser-Agent: laninv/0.1\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nUser-Agent: laninv/0.1\r\n\r\n"
     );
     stream.write_all(request.as_bytes()).ok()?;
 

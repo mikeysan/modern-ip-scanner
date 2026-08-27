@@ -118,7 +118,15 @@ pub fn merge_observations(observations: &[Observation]) -> Vec<ObservedDevice> {
         }
         ips.sort();
         ips.dedup();
-        names.sort(); // (source, name): Ssdp < Netbios < Mdns by enum order
+        // Readability first, then source trust. mDNS is usually the best name
+        // signal, but Chromecast-family devices publish a UUID there while
+        // advertising a real name over SSDP — and a UUID is no more use to a
+        // person than the MAC it would otherwise replace.
+        names.sort_by(|(src_a, a), (src_b, b)| {
+            let key =
+                |src: &NameSource, n: &String| (!crate::identity::looks_like_identifier(n), *src);
+            key(src_a, a).cmp(&key(src_b, b))
+        });
         let name = names.last().map(|(_, n)| n.clone());
         let name_source = names.last().map(|(s, _)| *s);
         merged.push(ObservedDevice {
@@ -242,6 +250,25 @@ mod tests {
         assert_eq!(tower.mac.as_deref(), Some("aa:aa:aa:aa:aa:aa"));
         assert!(tower.ips.contains(&"10.0.0.1".to_string()));
         assert!(tower.ips.contains(&"10.0.0.2".to_string()));
+    }
+
+    #[test]
+    fn a_readable_name_beats_a_uuid_from_a_more_trusted_source() {
+        // A Sony BRAVIA: Chromecast-built-in answers mDNS with its UUID
+        // hostname, while SSDP carries the name its owner actually set.
+        let observations = vec![
+            obs(
+                "10.0.0.5",
+                Some("dd:dd:dd:dd:dd:dd"),
+                Some(("mdns", "705c66d2-019a-264d-4b6d-8e2f1a2b3c4d")),
+                "mdns",
+            ),
+            obs("10.0.0.5", None, Some(("ssdp", "area boys")), "ssdp"),
+        ];
+        let merged = merge_observations(&observations);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name.as_deref(), Some("area boys"));
+        assert_eq!(merged[0].name_source, Some(NameSource::Ssdp));
     }
 
     #[test]

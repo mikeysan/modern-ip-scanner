@@ -1,3 +1,5 @@
+export type DeviceStatus = "new" | "changed" | "gone" | "known";
+
 export interface DeviceView {
   id: number;
   key: string;
@@ -11,6 +13,10 @@ export interface DeviceView {
   last_ip: string | null;
   networks: string[];
   notes: string | null;
+  /** Standing as of the network's most recent scan. */
+  status: DeviceStatus;
+  /** False when the device cannot be re-identified across scans. */
+  identity_stable: boolean;
 }
 
 export interface NetworkView {
@@ -76,6 +82,7 @@ export interface AppStateInfo {
   devices: number;
   capabilities: string[];
   helper_available: boolean;
+  helper_search_paths: string[];
   interface: { name: string; kind: string; ips: string[] } | null;
 }
 
