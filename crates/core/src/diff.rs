@@ -74,6 +74,11 @@ pub struct PriorState {
     pub last_hostname: Option<String>,
     pub last_mac: Option<String>,
     pub miss_streak: i64,
+    /// True when a `gone` transition has already been emitted for this
+    /// absence. Without it, "has it crossed the threshold?" is indistinguishable
+    /// from "has it been past the threshold for a while?" whenever
+    /// `grace_scans` changes underneath a device.
+    pub reported_gone: bool,
     /// False when this device cannot be re-identified across scans — see
     /// [`crate::identity::is_stable`]. Absence is unprovable for those.
     pub identity_stable: bool,
@@ -99,6 +104,9 @@ pub struct DiffOutcome {
     pub streak_updates: Vec<(String, i64)>,
     /// Devices whose streak should reset because they were seen again.
     pub streak_resets: Vec<String>,
+    /// Devices just announced `gone`, so the store can record that the
+    /// announcement was made and not repeat it next scan.
+    pub gone_marks: Vec<String>,
 }
 
 pub fn compute_diff(
@@ -110,6 +118,7 @@ pub fn compute_diff(
     let mut transitions = Vec::new();
     let mut streak_updates = Vec::new();
     let mut streak_resets = Vec::new();
+    let mut gone_marks = Vec::new();
 
     // --- devices observed this scan ---
     for obs in observed.values() {
@@ -156,8 +165,9 @@ pub fn compute_diff(
                         unstable_identity: !obs.identity_stable,
                     });
                 }
-                // Returning from a long absence: streak had hit grace before.
-                if p.miss_streak >= grace_scans as i64 {
+                // Returning from an absence we actually announced. A quiet
+                // spell nobody was told about is not a return.
+                if p.reported_gone {
                     transitions.push(Transition {
                         kind: TransitionKind::Returned,
                         device_key: obs.device_key.clone(),
@@ -190,7 +200,8 @@ pub fn compute_diff(
         }
         let new_streak = p.miss_streak + 1;
         streak_updates.push((key.clone(), new_streak));
-        if new_streak == grace_scans as i64 {
+        if new_streak >= grace_scans as i64 && !p.reported_gone {
+            gone_marks.push(key.clone());
             transitions.push(Transition {
                 kind: TransitionKind::Gone,
                 device_key: key.clone(),
@@ -205,6 +216,7 @@ pub fn compute_diff(
         transitions,
         streak_updates,
         streak_resets,
+        gone_marks,
     }
 }
 
@@ -221,6 +233,7 @@ mod tests {
             last_hostname: hostname.map(|s| s.into()),
             last_mac: mac.map(|s| s.into()),
             miss_streak: 0,
+            reported_gone: false,
             identity_stable: true,
         }
     }
@@ -430,6 +443,97 @@ mod tests {
     }
 
     #[test]
+    fn gone_is_reported_once_per_absence_however_long_it_lasts() {
+        let empty: HashMap<String, ObservedState> = HashMap::new();
+        let absent = |streak: i64, reported: bool| {
+            map(vec![(
+                "a".into(),
+                PriorState {
+                    miss_streak: streak,
+                    reported_gone: reported,
+                    ..prior("a", "10.0.0.1", None, None)
+                },
+            )])
+        };
+        let gones = |p| {
+            compute_diff(p, &empty, &ScanIntegrity::complete(), 2)
+                .transitions
+                .iter()
+                .filter(|t| t.kind == TransitionKind::Gone)
+                .count()
+        };
+        assert_eq!(gones(absent(1, false)), 1, "crossing grace reports once");
+        for streak in [2, 3, 9] {
+            assert_eq!(
+                gones(absent(streak, true)),
+                0,
+                "streak {streak} re-reported an absence already announced"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lowered_grace_still_reports_a_device_that_is_already_absent() {
+        // Grace was 4 and the device sat at 3, unreported. The user lowers it
+        // to 2. Exact-equality would step from 3 to 4 and never fire.
+        let empty: HashMap<String, ObservedState> = HashMap::new();
+        let p = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 3,
+                reported_gone: false,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        assert!(compute_diff(p, &empty, &ScanIntegrity::complete(), 2)
+            .transitions
+            .iter()
+            .any(|t| t.kind == TransitionKind::Gone));
+    }
+
+    #[test]
+    fn returning_is_announced_only_if_the_absence_was() {
+        let observed = map(vec![("a".into(), observed("a", "10.0.0.1", None, None))]);
+        let returned = |reported: bool| {
+            let p = map(vec![(
+                "a".into(),
+                PriorState {
+                    miss_streak: 5,
+                    reported_gone: reported,
+                    ..prior("a", "10.0.0.1", None, None)
+                },
+            )]);
+            compute_diff(p, &observed, &ScanIntegrity::complete(), 2)
+                .transitions
+                .iter()
+                .any(|t| t.kind == TransitionKind::Returned)
+        };
+        assert!(returned(true), "a device we called gone came back");
+        assert!(
+            !returned(false),
+            "a quiet spell nobody was told about is not a return"
+        );
+    }
+
+    #[test]
+    fn an_announced_absence_is_cleared_when_the_device_returns() {
+        let observed = map(vec![("a".into(), observed("a", "10.0.0.1", None, None))]);
+        let p = map(vec![(
+            "a".into(),
+            PriorState {
+                miss_streak: 5,
+                reported_gone: true,
+                ..prior("a", "10.0.0.1", None, None)
+            },
+        )]);
+        let out = compute_diff(p, &observed, &ScanIntegrity::complete(), 2);
+        assert!(
+            out.streak_resets.contains(&"a".to_string()),
+            "the next absence must be announceable again"
+        );
+    }
+
+    #[test]
     fn gone_requires_grace_on_complete_scans() {
         let empty: HashMap<String, ObservedState> = HashMap::new();
         // First miss: streak 1 < grace 2 → no gone yet.
@@ -461,11 +565,12 @@ mod tests {
             .filter(|t| t.kind == TransitionKind::Gone)
             .collect();
         assert_eq!(gones.len(), 1);
-        // Third miss: streak 3 > grace → not emitted again.
+        // Third miss: the absence was already announced, so it stays quiet.
         let p2 = map(vec![(
             "a".into(),
             PriorState {
                 miss_streak: 2,
+                reported_gone: true,
                 ..prior("a", "10.0.0.1", None, None)
             },
         )]);
@@ -521,6 +626,7 @@ mod tests {
             "a".into(),
             PriorState {
                 miss_streak: 5,
+                reported_gone: true,
                 ..prior("a", "10.0.0.1", None, None)
             },
         )]);

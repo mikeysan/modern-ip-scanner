@@ -113,6 +113,7 @@ fn main() -> Result<()> {
             let (scan_id, at) = store
                 .last_scan_for_network(&nk)?
                 .context("no scan recorded for that network")?;
+            let summary = store.scan_summary(scan_id)?;
             let transitions = store.transitions_of_scan(scan_id)?;
             if cli.json {
                 println!(
@@ -121,6 +122,8 @@ fn main() -> Result<()> {
                         "network": nk,
                         "scan_id": scan_id,
                         "finished_at": at,
+                        "partial": summary.as_ref().map(|s| s.partial),
+                        "partial_reasons": summary.as_ref().map(|s| s.partial_reasons.clone()),
                         "transitions": transitions,
                     })
                 );
@@ -129,6 +132,17 @@ fn main() -> Result<()> {
                     "Diff for network {nk} (scan #{scan_id} at {})",
                     fmt_time(at)
                 );
+                // A diff that cannot report `gone` has to say so, or "no
+                // changes" reads as "nothing left" when it means "we could
+                // not tell".
+                if let Some(s) = &summary {
+                    if s.partial {
+                        println!("  ⚠ PARTIAL SCAN — \"gone\" transitions suppressed:");
+                        for r in &s.partial_reasons {
+                            println!("    · {}: {}", r.strategy, r.reason);
+                        }
+                    }
+                }
                 print_transitions(&transitions);
             }
         }

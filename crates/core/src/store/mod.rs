@@ -105,6 +105,10 @@ const MIGRATIONS: &[&str] = &[
         ('grace_scans', '2'),
         ('observations_retention_days', '90'),
         ('enabled_strategies', '[\"arp-cache\",\"ping-sweep\",\"mdns\",\"ssdp\",\"netbios\",\"arp-ping\"]');",
+    // v2: remember whether an absence was already announced, so `gone` is
+    // emitted once per absence even if grace_scans changes underneath a
+    // device that is already missing.
+    "ALTER TABLE presence ADD COLUMN reported_gone INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// What a frontend needs to describe a finished scan: whether it was partial,
@@ -139,6 +143,8 @@ pub struct PresenceRow {
     pub last_seen: i64,
     pub miss_streak: i64,
     pub last_ip: Option<String>,
+    /// A `gone` transition has already been emitted for this absence.
+    pub reported_gone: bool,
 }
 
 pub struct Store {
@@ -248,7 +254,7 @@ impl Store {
     pub fn list_networks(&self) -> Result<Vec<NetworkView>> {
         let mut stmt = self.conn.prepare(
             "SELECT n.key, n.label, n.subnet, n.gateway_mac, n.first_seen, n.last_seen,
-                    (SELECT COUNT(*) FROM presence p WHERE p.network_key = n.key AND p.last_seen >= n.last_seen - 604800) AS device_count
+                    (SELECT COUNT(*) FROM presence p WHERE p.network_key = n.key) AS device_count
              FROM networks n ORDER BY n.last_seen DESC",
         )?;
         let rows = stmt.query_map([], row_network)?;
@@ -470,7 +476,8 @@ impl Store {
 
     pub fn presence_for_network(&self, network_key: &str) -> Result<Vec<PresenceRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT device_key, network_key, first_seen, last_seen, miss_streak, last_ip
+            "SELECT device_key, network_key, first_seen, last_seen, miss_streak, last_ip,
+                    reported_gone
              FROM presence WHERE network_key = ?1",
         )?;
         let rows = stmt.query_map([network_key], |r| {
@@ -481,6 +488,7 @@ impl Store {
                 last_seen: r.get(3)?,
                 miss_streak: r.get(4)?,
                 last_ip: r.get(5)?,
+                reported_gone: r.get::<_, i64>(6)? != 0,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -499,6 +507,7 @@ impl Store {
              ON CONFLICT(device_key, network_key) DO UPDATE SET
                 last_seen = excluded.last_seen,
                 miss_streak = 0,
+                reported_gone = 0,
                 last_ip = coalesce(excluded.last_ip, presence.last_ip)",
             params![device_key, network_key, t, last_ip],
         )?;
@@ -533,6 +542,7 @@ impl Store {
              ON CONFLICT(device_key, network_key) DO UPDATE SET
                 last_seen = excluded.last_seen,
                 miss_streak = 0,
+                reported_gone = 0,
                 last_ip = coalesce(excluded.last_ip, presence.last_ip)",
             params![device_key, network_key, t, last_ip],
         )?;
@@ -546,6 +556,20 @@ impl Store {
     ) -> Result<()> {
         tx.execute(
             "UPDATE presence SET miss_streak = miss_streak + 1
+             WHERE device_key = ?1 AND network_key = ?2",
+            params![device_key, network_key],
+        )?;
+        Ok(())
+    }
+
+    /// Record that a `gone` transition has been emitted for this absence.
+    pub fn mark_reported_gone_tx(
+        tx: &rusqlite::Transaction<'_>,
+        device_key: &str,
+        network_key: &str,
+    ) -> Result<()> {
+        tx.execute(
+            "UPDATE presence SET reported_gone = 1
              WHERE device_key = ?1 AND network_key = ?2",
             params![device_key, network_key],
         )?;

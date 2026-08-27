@@ -128,6 +128,7 @@ fn snapshot_prior(store: &Store, net_key: &str) -> Result<HashMap<String, PriorS
                 last_hostname: device.as_ref().and_then(|d| d.primary_name.clone()),
                 last_mac: device.as_ref().and_then(|d| d.mac.clone()),
                 miss_streak: p.miss_streak,
+                reported_gone: p.reported_gone,
                 identity_stable: crate::identity::is_stable(
                     device.as_ref().and_then(|d| d.primary_name.as_deref()),
                     device.as_ref().and_then(|d| d.mac.as_deref()),
@@ -229,18 +230,40 @@ fn resolve_observed(
 /// Order matters and is the whole point of this function: `resolve_observed`
 /// writes this scan's values into the device rows, so the prior snapshot has
 /// to be taken first or the diff compares every field against itself.
+struct ResolvedScan {
+    observed: HashMap<String, ObservedState>,
+    /// Which device each observed address belongs to, so raw observations can
+    /// be recorded against the right device with their own provenance.
+    ip_owner: HashMap<String, String>,
+    outcome: crate::diff::DiffOutcome,
+}
+
 fn resolve_and_diff(
     store: &Store,
     merged: &[crate::merge::ObservedDevice],
     net_key: &str,
     integrity: &ScanIntegrity,
     grace: u32,
-) -> Result<(HashMap<String, ObservedState>, crate::diff::DiffOutcome), StoreError> {
+) -> Result<ResolvedScan, StoreError> {
     let prior = snapshot_prior(store, net_key)?;
-    let observed_states = resolve_observed(store, merged, net_key)?;
+    let observed = resolve_observed(store, merged, net_key)?;
     let prior = remap_prior_through_aliases(store, prior)?;
-    let outcome = compute_diff(prior, &observed_states, integrity, grace);
-    Ok((observed_states, outcome))
+    let outcome = compute_diff(prior, &observed, integrity, grace);
+
+    let mut ip_owner = HashMap::new();
+    for d in merged {
+        let Some(state) = observed.values().find(|s| d.ips.contains(&s.ip)) else {
+            continue;
+        };
+        for ip in &d.ips {
+            ip_owner.insert(ip.clone(), state.device_key.clone());
+        }
+    }
+    Ok(ResolvedScan {
+        observed,
+        ip_owner,
+        outcome,
+    })
 }
 
 pub fn run_scan(
@@ -475,7 +498,11 @@ pub fn run_scan(
     };
     // 6. Resolve identity and diff. The prior snapshot is taken inside, before
     //    any device row is written -- see `resolve_and_diff`.
-    let (observed_states, outcome) = resolve_and_diff(store, &merged, &net_key, &integrity, grace)?;
+    let ResolvedScan {
+        observed: observed_states,
+        ip_owner,
+        outcome,
+    } = resolve_and_diff(store, &merged, &net_key, &integrity, grace)?;
 
     // 7. Commit scan + observations + transitions + presence atomically.
     let finished_at = now();
@@ -499,17 +526,23 @@ pub fn run_scan(
         &partial_reasons,
         &stats.to_string(),
     )?;
-    for (key, state) in &observed_states {
+    // One row per raw observation, keeping which strategy saw what. A single
+    // merged row per device would make `laninv history` unable to say *how* a
+    // device was seen, and the source/confidence columns constants.
+    for o in &all_observations {
+        let Some(key) = ip_owner.get(&o.ip) else {
+            continue;
+        };
         Store::insert_observation(
             &tx,
             scan_id,
             finished_at,
             key,
-            &state.ip,
-            state.mac.as_deref(),
-            state.hostname.as_deref(),
-            "merged",
-            1.0,
+            &o.ip,
+            o.mac.as_deref(),
+            o.name.as_ref().map(|(_, n)| n.as_str()),
+            &o.source,
+            o.confidence as f64,
         )?;
     }
     for t in &outcome.transitions {
@@ -529,6 +562,9 @@ pub fn run_scan(
     }
     for (key, _streak) in &outcome.streak_updates {
         Store::bump_miss_streak_tx(&tx, key, &net_key)?;
+    }
+    for key in &outcome.gone_marks {
+        Store::mark_reported_gone_tx(&tx, key, &net_key)?;
     }
     tx.commit()?;
 
@@ -657,14 +693,20 @@ mod tests {
         devices: &[crate::merge::ObservedDevice],
         net: &str,
     ) -> Vec<Transition> {
-        let (observed, outcome) =
-            resolve_and_diff(store, devices, net, &ScanIntegrity::complete(), 2).unwrap();
+        let ResolvedScan {
+            observed, outcome, ..
+        } = resolve_and_diff(store, devices, net, &ScanIntegrity::complete(), 2).unwrap();
         for key in &outcome.streak_resets {
             let ip = observed.get(key).map(|s| s.ip.clone());
             store.upsert_presence(key, net, ip.as_deref()).unwrap();
         }
         for (key, _) in &outcome.streak_updates {
             store.bump_miss_streak(key, net).unwrap();
+        }
+        for key in &outcome.gone_marks {
+            let tx = store.begin().unwrap();
+            Store::mark_reported_gone_tx(&tx, key, net).unwrap();
+            tx.commit().unwrap();
         }
         outcome.transitions
     }
