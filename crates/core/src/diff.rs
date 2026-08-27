@@ -90,7 +90,7 @@ pub struct ObservedState {
 pub struct DiffOutcome {
     pub transitions: Vec<Transition>,
     /// (device_key, new_streak) for devices not seen this scan. Only advanced
-    /// on complete scans; empty on partial scans by design.
+    /// when the scan could prove absence; empty on partial scans by design.
     pub streak_updates: Vec<(String, i64)>,
     /// Devices whose streak should reset because they were seen again.
     pub streak_resets: Vec<String>,
@@ -122,30 +122,25 @@ pub fn compute_diff(
             }
             Some(p) => {
                 streak_resets.push(obs.device_key.clone());
+                // A field changed only when this scan actually observed a
+                // value that differs from the one on record. Not hearing a
+                // name is not the same as the name going away — the integrity
+                // rule again, applied one field at a time.
                 let mut changes = Vec::new();
-                if p.last_ip.as_deref() != Some(obs.ip.as_str()) {
-                    changes.push(FieldChange {
-                        field: "ip".to_string(),
-                        from: p.last_ip.clone(),
-                        to: Some(obs.ip.clone()),
-                    });
-                }
-                if p.last_hostname != obs.hostname
-                    && (p.last_hostname.is_some() || obs.hostname.is_some())
-                {
-                    changes.push(FieldChange {
-                        field: "hostname".to_string(),
-                        from: p.last_hostname.clone(),
-                        to: obs.hostname.clone(),
-                    });
-                }
-                if p.last_mac != obs.mac && (p.last_mac.is_some() || obs.mac.is_some()) {
-                    changes.push(FieldChange {
-                        field: "mac".to_string(),
-                        from: p.last_mac.clone(),
-                        to: obs.mac.clone(),
-                    });
-                }
+                let mut note = |field: &str, from: &Option<String>, to: Option<&str>| {
+                    if let Some(to) = to.filter(|t| !t.is_empty()) {
+                        if from.as_deref() != Some(to) {
+                            changes.push(FieldChange {
+                                field: field.to_string(),
+                                from: from.clone(),
+                                to: Some(to.to_string()),
+                            });
+                        }
+                    }
+                };
+                note("ip", &p.last_ip, Some(obs.ip.as_str()));
+                note("hostname", &p.last_hostname, obs.hostname.as_deref());
+                note("mac", &p.last_mac, obs.mac.as_deref());
                 if !changes.is_empty() {
                     transitions.push(Transition {
                         kind: TransitionKind::Changed,

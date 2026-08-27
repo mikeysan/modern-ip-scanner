@@ -104,6 +104,133 @@ fn absence_evidence_gap(
     }
 }
 
+/// The inventory's view of every device on this network, as it stands right
+/// now. Must be taken *before* the scan writes anything, or every field is
+/// compared against itself.
+fn snapshot_prior(store: &Store, net_key: &str) -> Result<HashMap<String, PriorState>, StoreError> {
+    let mut prior = HashMap::new();
+    for p in store.presence_for_network(net_key)? {
+        let device = store.get_device(&p.device_key).ok().flatten();
+        let display = store
+            .get_user_name(&p.device_key)
+            .ok()
+            .flatten()
+            .map(|(n, _)| n)
+            .or_else(|| device.as_ref().and_then(|d| d.primary_name.clone()))
+            .or_else(|| device.as_ref().and_then(|d| d.mac.clone()))
+            .unwrap_or_else(|| p.device_key.clone());
+        prior.insert(
+            p.device_key.clone(),
+            PriorState {
+                device_key: p.device_key,
+                display_name: display,
+                last_ip: p.last_ip,
+                last_hostname: device.as_ref().and_then(|d| d.primary_name.clone()),
+                last_mac: device.as_ref().and_then(|d| d.mac.clone()),
+                miss_streak: p.miss_streak,
+            },
+        );
+    }
+    Ok(prior)
+}
+
+/// Re-point a prior snapshot through any aliases the scan created.
+///
+/// Resolving identity can re-fingerprint a device, moving its presence row to
+/// a new key. A snapshot taken beforehand still holds the old key, and would
+/// otherwise make one device look simultaneously new and gone.
+fn remap_prior_through_aliases(
+    store: &Store,
+    prior: HashMap<String, PriorState>,
+) -> Result<HashMap<String, PriorState>, StoreError> {
+    let mut out: HashMap<String, PriorState> = HashMap::with_capacity(prior.len());
+    for (key, mut state) in prior {
+        let canonical = store.resolve_alias(&key)?;
+        state.device_key = canonical.clone();
+        match out.get(&canonical) {
+            // Two old identities merged into one: keep the one seen most
+            // recently, so a merge can never manufacture a `gone`.
+            Some(existing) if existing.miss_streak <= state.miss_streak => {}
+            _ => {
+                out.insert(canonical, state);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Resolve each merged observation to a device identity, updating the stored
+/// device rows as it goes.
+fn resolve_observed(
+    store: &Store,
+    merged: &[crate::merge::ObservedDevice],
+    net_key: &str,
+) -> Result<HashMap<String, ObservedState>, StoreError> {
+    let mut observed_states: HashMap<String, ObservedState> = HashMap::new();
+    for d in merged {
+        let key = match resolve_identity(store, d, net_key)? {
+            Resolution::Existing(existing) => {
+                let canonical = maybe_refingerprint(store, &existing, d)?;
+                store.update_device_fields(
+                    &canonical,
+                    d.name.as_deref(),
+                    d.mac.as_deref().or(existing.mac.as_deref()),
+                    d.vendor.as_deref().or(existing.vendor.as_deref()),
+                )?;
+                canonical
+            }
+            Resolution::New(key) => {
+                store.upsert_device(
+                    &key,
+                    d.name.as_deref(),
+                    d.mac.as_deref(),
+                    d.vendor.as_deref(),
+                    net_key,
+                )?;
+                key
+            }
+        };
+        let display = store
+            .get_user_name(&key)
+            .ok()
+            .flatten()
+            .map(|(n, _)| n)
+            .or_else(|| d.name.clone())
+            .or_else(|| d.mac.clone())
+            .unwrap_or_else(|| d.ips.first().cloned().unwrap_or_default());
+        observed_states.insert(
+            key.clone(),
+            ObservedState {
+                device_key: key,
+                display_name: display,
+                ip: d.ips.first().cloned().unwrap_or_default(),
+                hostname: d.name.clone(),
+                mac: d.mac.clone(),
+            },
+        );
+    }
+    Ok(observed_states)
+}
+
+/// Resolve identities and diff them against the inventory.
+///
+/// Order matters and is the whole point of this function: `resolve_observed`
+/// writes this scan's values into the device rows, so the prior snapshot has
+/// to be taken first or the diff compares every field against itself.
+fn resolve_and_diff(
+    store: &Store,
+    merged: &[crate::merge::ObservedDevice],
+    net_key: &str,
+    integrity: &ScanIntegrity,
+    grace: u32,
+) -> Result<(HashMap<String, ObservedState>, crate::diff::DiffOutcome), StoreError> {
+    let prior = snapshot_prior(store, net_key)?;
+    let observed_states = resolve_observed(store, merged, net_key)?;
+    let prior = remap_prior_through_aliases(store, prior)?;
+    let outcome = compute_diff(prior, &observed_states, integrity, grace);
+    Ok((observed_states, outcome))
+}
+
 pub fn run_scan(
     store: &mut Store,
     opts: &ScanOptions,
@@ -322,79 +449,6 @@ pub fn run_scan(
         progress(&format!("cannot report devices gone: {}", gap.reason));
     }
 
-    let mut observed_states: HashMap<String, ObservedState> = HashMap::new();
-    for d in &merged {
-        let resolution = resolve_identity(store, d, &net_key)?;
-        let key = match resolution {
-            Resolution::Existing(existing) => {
-                let canonical = maybe_refingerprint(store, &existing, d)?;
-                store.update_device_fields(
-                    &canonical,
-                    d.name.as_deref(),
-                    d.mac.as_deref().or(existing.mac.as_deref()),
-                    d.vendor.as_deref().or(existing.vendor.as_deref()),
-                )?;
-                canonical
-            }
-            Resolution::New(key) => {
-                store.upsert_device(
-                    &key,
-                    d.name.as_deref(),
-                    d.mac.as_deref(),
-                    d.vendor.as_deref(),
-                    &net_key,
-                )?;
-                key
-            }
-        };
-        let display = store
-            .get_user_name(&key)
-            .ok()
-            .flatten()
-            .map(|(n, _)| n)
-            .or_else(|| d.name.clone())
-            .or_else(|| d.mac.clone())
-            .unwrap_or_else(|| d.ips.first().cloned().unwrap_or_default());
-        observed_states.insert(
-            key.clone(),
-            ObservedState {
-                device_key: key,
-                display_name: display,
-                ip: d.ips.first().cloned().unwrap_or_default(),
-                hostname: d.name.clone(),
-                mac: d.mac.clone(),
-            },
-        );
-    }
-
-    // 6. Diff against the previous inventory state.
-    let prior: HashMap<String, PriorState> = store
-        .presence_for_network(&net_key)?
-        .into_iter()
-        .map(|p| {
-            let device = store.get_device(&p.device_key).ok().flatten();
-            let display = store
-                .get_user_name(&p.device_key)
-                .ok()
-                .flatten()
-                .map(|(n, _)| n)
-                .or_else(|| device.as_ref().and_then(|d| d.primary_name.clone()))
-                .or_else(|| device.as_ref().and_then(|d| d.mac.clone()))
-                .unwrap_or_else(|| p.device_key.clone());
-            (
-                p.device_key.clone(),
-                PriorState {
-                    device_key: p.device_key,
-                    display_name: display,
-                    last_ip: p.last_ip,
-                    last_hostname: device.as_ref().and_then(|d| d.primary_name.clone()),
-                    last_mac: device.as_ref().and_then(|d| d.mac.clone()),
-                    miss_streak: p.miss_streak,
-                },
-            )
-        })
-        .collect();
-
     // Everything that stops this scan short, whether a strategy failed or the
     // scan simply never covered enough ground to prove absence.
     let mut partial_reasons = problems.clone();
@@ -407,7 +461,9 @@ pub fn run_scan(
             .map(|p| (p.strategy.clone(), p.reason.clone()))
             .collect(),
     };
-    let outcome = compute_diff(prior, &observed_states, &integrity, grace);
+    // 6. Resolve identity and diff. The prior snapshot is taken inside, before
+    //    any device row is written -- see `resolve_and_diff`.
+    let (observed_states, outcome) = resolve_and_diff(store, &merged, &net_key, &integrity, grace)?;
 
     // 7. Commit scan + observations + transitions + presence atomically.
     let finished_at = now();
@@ -547,6 +603,7 @@ fn ensure_gateway_mac(mut iface: Interface, priv_state: &PrivilegeState) -> Inte
 mod tests {
     use super::*;
     use crate::discovery::StrategyOutcome;
+    use crate::model::{Transition, TransitionKind};
 
     fn obs(ip: &str) -> Observation {
         Observation {
@@ -561,6 +618,156 @@ mod tests {
 
     fn ips(list: &[&str]) -> std::collections::BTreeSet<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn tmp_store() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.sqlite3")).unwrap();
+        (dir, store)
+    }
+
+    fn seen(ip: &str, mac: Option<&str>, name: Option<&str>) -> crate::merge::ObservedDevice {
+        crate::merge::ObservedDevice {
+            ips: vec![ip.to_string()],
+            mac: mac.map(|m| m.to_string()),
+            name: name.map(|n| n.to_string()),
+            name_source: name.map(|_| crate::model::NameSource::Mdns),
+            vendor: None,
+            sources: vec!["test".into()],
+            confidence: 0.9,
+        }
+    }
+
+    /// Run one scan's worth of resolve+diff and commit presence, the way
+    /// run_scan does.
+    fn scan_once(
+        store: &mut Store,
+        devices: &[crate::merge::ObservedDevice],
+        net: &str,
+    ) -> Vec<Transition> {
+        let (observed, outcome) =
+            resolve_and_diff(store, devices, net, &ScanIntegrity::complete(), 2).unwrap();
+        for key in &outcome.streak_resets {
+            let ip = observed.get(key).map(|s| s.ip.clone());
+            store.upsert_presence(key, net, ip.as_deref()).unwrap();
+        }
+        outcome.transitions
+    }
+
+    fn changed_fields(transitions: &[Transition]) -> Vec<(String, Option<String>, Option<String>)> {
+        transitions
+            .iter()
+            .filter(|t| t.kind == TransitionKind::Changed)
+            .flat_map(|t| t.changes.iter().cloned())
+            .map(|c| (c.field, c.from, c.to))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_mac_on_a_known_device_is_reported_as_changed() {
+        // The scan updates the device row before diffing, so without an
+        // explicit pre-scan snapshot this compares the new MAC against itself
+        // and reports nothing.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+
+        let first = scan_once(
+            &mut store,
+            &[seen("10.0.0.5", Some("aa:aa:aa:aa:aa:aa"), Some("printer"))],
+            "net1",
+        );
+        assert!(first.iter().any(|t| t.kind == TransitionKind::New));
+
+        let second = scan_once(
+            &mut store,
+            &[seen("10.0.0.5", Some("bb:bb:bb:bb:bb:bb"), Some("printer"))],
+            "net1",
+        );
+        assert_eq!(
+            changed_fields(&second),
+            vec![(
+                "mac".to_string(),
+                Some("aa:aa:aa:aa:aa:aa".to_string()),
+                Some("bb:bb:bb:bb:bb:bb".to_string())
+            )],
+            "a device that changed its MAC must be reported as changed"
+        );
+    }
+
+    #[test]
+    fn a_new_hostname_on_a_known_device_is_reported_as_changed() {
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        scan_once(
+            &mut store,
+            &[seen(
+                "10.0.0.5",
+                Some("aa:aa:aa:aa:aa:aa"),
+                Some("old-name"),
+            )],
+            "net1",
+        );
+        let second = scan_once(
+            &mut store,
+            &[seen(
+                "10.0.0.5",
+                Some("aa:aa:aa:aa:aa:aa"),
+                Some("new-name"),
+            )],
+            "net1",
+        );
+        assert_eq!(
+            changed_fields(&second),
+            vec![(
+                "hostname".to_string(),
+                Some("old-name".to_string()),
+                Some("new-name".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn an_unchanged_device_is_reported_repeatedly_as_nothing() {
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        let d = seen("10.0.0.5", Some("aa:aa:aa:aa:aa:aa"), Some("printer"));
+        scan_once(&mut store, std::slice::from_ref(&d), "net1");
+        for round in 0..3 {
+            let t = scan_once(&mut store, std::slice::from_ref(&d), "net1");
+            assert!(t.is_empty(), "round {round} produced spurious {t:?}");
+        }
+    }
+
+    #[test]
+    fn a_field_we_did_not_observe_is_not_a_change() {
+        // mDNS answers on one scan and not the next. Silence about a name is
+        // not the same as the name going away -- the same principle as the
+        // integrity rule, applied per field.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        scan_once(
+            &mut store,
+            &[seen("10.0.0.5", Some("aa:aa:aa:aa:aa:aa"), Some("printer"))],
+            "net1",
+        );
+        let second = scan_once(
+            &mut store,
+            &[seen("10.0.0.5", Some("aa:aa:aa:aa:aa:aa"), None)],
+            "net1",
+        );
+        assert!(
+            changed_fields(&second).is_empty(),
+            "not hearing a name must not be reported as losing it, got {:?}",
+            changed_fields(&second)
+        );
     }
 
     #[test]
