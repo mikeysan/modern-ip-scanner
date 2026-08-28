@@ -616,7 +616,7 @@ pub fn run_scan(
         &stats.to_string(),
     )?;
     // One row per raw observation, keeping which strategy saw what. A single
-    // merged row per device would make `laninv history` unable to say *how* a
+    // merged row per device would make `mipscan history` unable to say *how* a
     // device was seen, and the source/confidence columns constants.
     for o in &all_observations {
         let Some(key) = ip_owner.get(&o.ip) else {

@@ -1,4 +1,4 @@
-//! laninv-core: LAN inventory and diff engine.
+//! modern-ip-scanner-core: LAN inventory and diff engine.
 //!
 //! See `docs/design.md` for the invariants this crate enforces.
 

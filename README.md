@@ -1,4 +1,4 @@
-# LAN Inventory (`laninv`)
+# Modern IP Scanner (`mipscan`)
 
 A cross-platform **LAN inventory and troubleshooting tool** for Windows and
 Linux — a modern successor to Angry IP Scanner / Advanced IP Scanner, built
@@ -29,8 +29,8 @@ user-assigned names** — the feature everything else hangs off.
 
 ```
 crates/core     discovery strategies, identity, SQLite store, diff engine
-crates/cli      `laninv` headless CLI (same core as the GUI)
-crates/helper   `laninv-helper` optional privileged helper (full ARP)
+crates/cli      `mipscan` headless CLI (same core as the GUI)
+crates/helper   `modern-ip-scanner-helper` optional privileged helper (full ARP)
 crates/gui      Tauri 2 app shell
 ui/             React + TypeScript frontend
 ```
@@ -42,18 +42,18 @@ Requires Rust (MSVC toolchain on Windows) and Node.js for the UI.
 ```bash
 cargo build --workspace          # binaries land in target/debug
 npm --prefix ui install          # frontend deps (once)
-cargo run -p laninv -- scan      # CLI scan
+cargo run -p modern-ip-scanner -- scan      # CLI scan
 cargo test --workspace           # unit tests (incl. integrity invariants)
 ```
 
 **Running the GUI takes one more step than you would expect.** A debug build
-loads `devUrl` (the Vite dev server), so `cargo run -p laninv-gui` on its own
+loads `devUrl` (the Vite dev server), so `cargo run -p modern-ip-scanner-gui` on its own
 opens a window showing *"can't reach this page"*. Either run the dev server
 alongside it:
 
 ```bash
 npm --prefix ui run dev          # leave running, then in another shell:
-cargo run -p laninv-gui
+cargo run -p modern-ip-scanner-gui
 ```
 
 `cargo tauri dev` does that for you if you have the Tauri CLI.
@@ -67,32 +67,32 @@ tries to load `devUrl` and opens on *"localhost refused to connect"*.
 
 ```bash
 npm --prefix ui run build                                  # produce ui/dist
-cargo build --release -p laninv-gui -p laninv -p laninv-helper \
-  --features laninv-gui/custom-protocol
+cargo build --release -p modern-ip-scanner-gui -p modern-ip-scanner -p modern-ip-scanner-helper \
+  --features modern-ip-scanner-gui/custom-protocol
 ```
 
-That leaves `laninv-gui.exe`, `laninv.exe` and `laninv-helper.exe` together in
+That leaves `modern-ip-scanner-gui.exe`, `mipscan.exe` and `modern-ip-scanner-helper.exe` together in
 `target/release/`. Keep the helper beside the GUI: it is looked for next to
 the executable, and it is what makes the elevated full-ARP sweep available.
 
 ## CLI cheat sheet
 
 ```
-laninv scan [--helper] [--strategy ID ...]   scan + record diff
-laninv devices [--network KEY] [--json]      inventory (rows = devices)
-laninv diff [--network KEY]                  what the last scan changed
-laninv name <id|key> "My Printer"            assign a persistent name
-laninv name <id|key> --clear                 remove an assigned name
-laninv networks                              remembered networks
-laninv label <key> "Home"                    label a remembered network
-laninv config [KEY [VALUE]]                  read or change a setting
-laninv history <id|key>                      per-device timeline
-laninv export [--format csv|json] [--network KEY]
+mipscan scan [--helper] [--strategy ID ...]   scan + record diff
+mipscan devices [--network KEY] [--json]      inventory (rows = devices)
+mipscan diff [--network KEY]                  what the last scan changed
+mipscan name <id|key> "My Printer"            assign a persistent name
+mipscan name <id|key> --clear                 remove an assigned name
+mipscan networks                              remembered networks
+mipscan label <key> "Home"                    label a remembered network
+mipscan config [KEY [VALUE]]                  read or change a setting
+mipscan history <id|key>                      per-device timeline
+mipscan export [--format csv|json] [--network KEY]
 ```
 
 `LANINV_DB=/path/db.sqlite3` overrides the database location (default:
-`%APPDATA%/laninv/laninv.sqlite3` on Windows,
-`~/.local/share/laninv/laninv.sqlite3` on Linux).
+`%APPDATA%/modern-ip-scanner/modern-ip-scanner.sqlite3` on Windows,
+`~/.local/share/modern-ip-scanner/modern-ip-scanner.sqlite3` on Linux).
 
 ## The privileged helper (optional)
 
@@ -104,7 +104,7 @@ The pipe is restricted to the launching user's SID and both ends
 authenticate: the helper checks the connecting client's token, and the client
 checks that the pipe is served by the process it launched.
 
-- CLI: `laninv scan --helper`
+- CLI: `mipscan scan --helper`
 - GUI: tick **helper** before scanning (shown when the helper binary is
   found; Settings lists every path that is checked).
 
@@ -132,7 +132,7 @@ rewrite.
   viewer's local time. There is no timezone database in the core.
 - Packaging is not configured: `bundle.active` is false, so there is no
   installer and nothing ships the optional helper. Build it with
-  `cargo build -p laninv-helper` and put it beside the app, or point
+  `cargo build -p modern-ip-scanner-helper` and put it beside the app, or point
   `LANINV_HELPER` at it — the Settings panel lists every path that is checked.
 - The Linux code paths have now been built, tested and **run** natively
   (Ubuntu 24.04 on WSL2): the full suite passes there, and the helper's
@@ -153,19 +153,19 @@ C dependencies:
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
-cargo check -p laninv-helper --target x86_64-unknown-linux-gnu
+cargo check -p modern-ip-scanner-helper --target x86_64-unknown-linux-gnu
 ```
 
-`laninv-core` cannot be cross-*compiled* this way: bundled SQLite needs a C
+`modern-ip-scanner-core` cannot be cross-*compiled* this way: bundled SQLite needs a C
 cross-compiler. Build it inside Linux instead, which takes about twenty
 seconds and needs no CI:
 
 ```bash
 wsl -d Ubuntu-24.04 -e bash -c \
-  'cd /mnt/c/path/to/repo && CARGO_TARGET_DIR=~/t cargo test -p laninv-core -p laninv -p laninv-helper'
+  'cd /mnt/c/path/to/repo && CARGO_TARGET_DIR=~/t cargo test -p modern-ip-scanner-core -p modern-ip-scanner -p modern-ip-scanner-helper'
 ```
 
-Exclude `laninv-gui` there unless the Tauri system libraries are installed,
+Exclude `modern-ip-scanner-gui` there unless the Tauri system libraries are installed,
 and build as your normal user rather than root, or rustup will not find a
 toolchain and root-owned files end up in your cargo directories.
 

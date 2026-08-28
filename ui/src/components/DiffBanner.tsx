@@ -72,7 +72,7 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
       {diff.transitions.some((t) => t.unstable_identity) && (
         <p className="muted small randomised-note">
           Devices marked <em>randomised identity</em> change their MAC by design.
-          laninv cannot follow them across rotations, so it never reports them
+          Modern IP Scanner cannot follow them across rotations, so it never reports them
           gone. Give one a name to make it trackable.
         </p>
       )}

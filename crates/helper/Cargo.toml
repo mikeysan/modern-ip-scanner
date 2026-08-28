@@ -1,12 +1,12 @@
 [package]
-name = "laninv-helper"
-description = "Optional privileged helper for laninv (full ARP resolution)"
+name = "modern-ip-scanner-helper"
+description = "Optional privileged helper for Modern IP Scanner (full ARP resolution)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "laninv-helper"
+name = "modern-ip-scanner-helper"
 path = "src/main.rs"
 
 [dependencies]

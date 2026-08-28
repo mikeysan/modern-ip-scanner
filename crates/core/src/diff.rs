@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn a_scan_that_cannot_prove_absence_never_emits_gone() {
         // Every strategy succeeded, but none of them can testify to absence:
-        // mDNS hearing nothing means nothing. Observed live: `laninv scan
+        // mDNS hearing nothing means nothing. Observed live: `mipscan scan
         // --strategy mdns` returned zero observations and reported a complete
         // scan, which would have marked the whole inventory gone.
         let prior = map(vec![(

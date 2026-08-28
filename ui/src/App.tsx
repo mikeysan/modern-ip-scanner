@@ -103,7 +103,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo">⌗</span>
-          <h1>LAN Inventory</h1>
+          <h1>Modern IP Scanner</h1>
           {ifaceLabel && <span className="iface">{ifaceLabel}</span>}
         </div>
         <nav className="tabs">

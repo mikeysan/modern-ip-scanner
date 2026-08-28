@@ -1,4 +1,4 @@
-//! `laninv-helper` — the optional privileged helper.
+//! `modern-ip-scanner-helper` — the optional privileged helper.
 //!
 //! Speaks newline-delimited JSON:
 //!   request  {"op":"arp","ip":"192.168.1.5"}
@@ -61,14 +61,16 @@ fn main() {
             .position(|a| a == "--owner")
             .and_then(|i| args.get(i + 1).cloned())
         else {
-            eprintln!("laninv-helper: --pipe requires --owner <sid>");
+            eprintln!("modern-ip-scanner-helper: --pipe requires --owner <sid>");
             std::process::exit(2);
         };
         std::process::exit(serve_pipe(&pipe, &owner));
     }
     {
-        eprintln!("laninv-helper: usage: --stdio | --pipe NAME --owner SID");
-        eprintln!("This binary is launched by laninv; running it by hand does nothing useful.");
+        eprintln!("modern-ip-scanner-helper: usage: --stdio | --pipe NAME --owner SID");
+        eprintln!(
+            "This binary is launched by Modern IP Scanner; running it by hand does nothing useful."
+        );
         std::process::exit(2);
     }
 }
@@ -469,7 +471,7 @@ fn serve_pipe(name: &str, owner_sid: &str) -> i32 {
     use windows::Win32::System::Pipes::PIPE_WAIT;
 
     let Some(descriptor) = pipe_acl::sddl_for_owner(owner_sid) else {
-        eprintln!("laninv-helper: refusing to serve: --owner is not a valid SID");
+        eprintln!("modern-ip-scanner-helper: refusing to serve: --owner is not a valid SID");
         return 2;
     };
     let sddl: Vec<u16> = descriptor.encode_utf16().chain([0]).collect();
@@ -482,7 +484,7 @@ fn serve_pipe(name: &str, owner_sid: &str) -> i32 {
             None,
         );
         if ok.is_err() {
-            eprintln!("laninv-helper: SDDL parse failed");
+            eprintln!("modern-ip-scanner-helper: SDDL parse failed");
             return 1;
         }
     }
@@ -507,7 +509,7 @@ fn serve_pipe(name: &str, owner_sid: &str) -> i32 {
     };
     if pipe.is_invalid() {
         eprintln!(
-            "laninv-helper: CreateNamedPipeW failed: {}",
+            "modern-ip-scanner-helper: CreateNamedPipeW failed: {}",
             std::io::Error::last_os_error()
         );
         unsafe {
@@ -526,7 +528,7 @@ fn serve_pipe(name: &str, owner_sid: &str) -> i32 {
         return 1;
     }
     if !unsafe { client_is(pipe, owner_sid) } {
-        eprintln!("laninv-helper: rejecting a client that is not the launching user");
+        eprintln!("modern-ip-scanner-helper: rejecting a client that is not the launching user");
         let _ = unsafe { CloseHandle(pipe) };
         unsafe {
             windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(sd.0)));
@@ -618,7 +620,7 @@ mod arp_linux {
             )
         };
         if fd < 0 {
-            eprintln!("laninv-helper: AF_PACKET socket failed (needs root)");
+            eprintln!("modern-ip-scanner-helper: AF_PACKET socket failed (needs root)");
             return None;
         }
         let result = exchange(fd, &ifname, src_mac, src_ip, dst_ip);

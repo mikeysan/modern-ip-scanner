@@ -166,15 +166,15 @@ impl Store {
         Ok(store)
     }
 
-    /// Default per-user database location (override with `LANINV_DB`).
+    /// Default per-user database location (override with `MIPSCAN_DB`).
     pub fn open_default() -> Result<Store> {
-        if let Ok(p) = std::env::var("LANINV_DB") {
+        if let Ok(p) = std::env::var("MIPSCAN_DB") {
             return Store::open(Path::new(&p));
         }
         let base: PathBuf = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("laninv");
-        Store::open(&base.join("laninv.sqlite3"))
+            .join("modern-ip-scanner");
+        Store::open(&base.join("modern-ip-scanner.sqlite3"))
     }
 
     fn migrate(&mut self) -> Result<()> {
@@ -1239,7 +1239,7 @@ mod tests {
             .get_network_by_ref("db64897c26616444")
             .unwrap()
             .is_some());
-        // `laninv networks` prints eight characters, so that is what people type.
+        // `mipscan networks` prints eight characters, so that is what people type.
         assert!(store.get_network_by_ref("db64897c").unwrap().is_some());
         assert!(store.get_network_by_ref("nope").unwrap().is_none());
     }

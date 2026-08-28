@@ -1,6 +1,6 @@
 [package]
-name = "laninv-core"
-description = "LAN inventory core: discovery, identity, store, diff"
+name = "modern-ip-scanner-core"
+description = "Modern IP Scanner core: discovery, identity, store, diff"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

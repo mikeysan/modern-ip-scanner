@@ -108,7 +108,7 @@ export default function SettingsPanel() {
         {state?.helper_available ? (
           <p className="muted small">
             Installed. Tick <em>helper</em> before scanning for full ARP
-            coverage; laninv never requires it.
+            coverage; Modern IP Scanner never requires it.
           </p>
         ) : (
           <>
@@ -118,7 +118,7 @@ export default function SettingsPanel() {
               native SendARP usually works and the helper is not needed.
             </p>
             <p className="muted small">
-              Build it with <code>cargo build -p laninv-helper</code> and put
+              Build it with <code>cargo build -p modern-ip-scanner-helper</code> and put
               the binary in one of:
             </p>
             <ul className="paths">

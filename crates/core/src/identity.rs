@@ -85,6 +85,11 @@ pub fn looks_like_identifier(name: &str) -> bool {
 
 fn hash_key(parts: &[&str]) -> String {
     let mut hasher = blake3::Hasher::new();
+    // Domain separation for the key hash. Deliberately NOT renamed with
+    // the product: every device and network key derives from it, so
+    // changing this string silently re-identifies every device in every
+    // existing database. The "-v1" is the version to bump if the key
+    // format ever genuinely changes.
     hasher.update(b"laninv-v1\x00");
     for p in parts {
         hasher.update(p.as_bytes());

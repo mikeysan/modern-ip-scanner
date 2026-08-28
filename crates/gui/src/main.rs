@@ -1,4 +1,4 @@
-//! laninv-gui: Tauri 2 shell over laninv-core.
+//! modern-ip-scanner-gui: Tauri 2 shell over modern-ip-scanner-core.
 //!
 //! Commands are thin wrappers; every integrity decision (partial scans,
 //! suppressed `gone` transitions) lives in the core so CLI and GUI can never
@@ -9,8 +9,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use laninv_core::model::{DeviceView, HistoryEvent, Interface, NetworkView};
-use laninv_core::store::Store;
+use modern_ip_scanner_core::model::{DeviceView, HistoryEvent, Interface, NetworkView};
+use modern_ip_scanner_core::store::Store;
 
 struct AppState {
     store: Arc<Mutex<Store>>,
@@ -49,19 +49,19 @@ impl Drop for ScanGuard {
 fn get_state(state: SharedState<'_>) -> Result<serde_json::Value, String> {
     let store = store_of(&state);
     let networks = store.list_networks().map_err(store_err)?;
-    let interfaces = laninv_core::netenv::interfaces();
-    let iface = laninv_core::netenv::default_interface(&interfaces);
+    let interfaces = modern_ip_scanner_core::netenv::interfaces();
+    let iface = modern_ip_scanner_core::netenv::default_interface(&interfaces);
     // Probing without an interface skips the ARP check entirely on Windows,
     // so the UI would report a capability set the scanner does not use.
-    let privilege = laninv_core::privilege::probe(iface.as_ref());
+    let privilege = modern_ip_scanner_core::privilege::probe(iface.as_ref());
     Ok(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "networks": networks.len(),
         "devices": store.list_devices(None).map_err(store_err)?.len(),
         "capabilities": privilege.capabilities.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
         "startup_error": state.startup_error,
-        "helper_available": laninv_core::privilege::helper_path().is_some(),
-        "helper_search_paths": laninv_core::privilege::helper_search_paths()
+        "helper_available": modern_ip_scanner_core::privilege::helper_path().is_some(),
+        "helper_search_paths": modern_ip_scanner_core::privilege::helper_search_paths()
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>(),
@@ -190,7 +190,7 @@ fn set_setting(state: SharedState, key: String, value: String) -> Result<(), Str
 fn export_csv(state: SharedState, network: Option<String>) -> Result<String, String> {
     let store = store_of(&state);
     let devices = store.list_devices(network.as_deref()).map_err(store_err)?;
-    Ok(laninv_core::export::devices_csv(&devices))
+    Ok(modern_ip_scanner_core::export::devices_csv(&devices))
 }
 
 /// Kick off a scan in the background; progress arrives as events.
@@ -214,7 +214,7 @@ fn start_scan(
         // Setting the flag after the scan instead left the UI stuck on
         // "Scanning…" forever, with no way back but a restart.
         let _guard = ScanGuard(scanning);
-        let opts = laninv_core::ScanOptions {
+        let opts = modern_ip_scanner_core::ScanOptions {
             strategies,
             use_helper,
         };
@@ -223,7 +223,7 @@ fn start_scan(
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
-            laninv_core::run_scan(&mut guard, &opts, &mut progress)
+            modern_ip_scanner_core::run_scan(&mut guard, &opts, &mut progress)
         }));
         match outcome {
             Ok(Ok(r)) => {
@@ -246,7 +246,7 @@ fn start_scan(
 
 #[tauri::command]
 fn list_interfaces() -> Vec<Interface> {
-    laninv_core::netenv::interfaces()
+    modern_ip_scanner_core::netenv::interfaces()
 }
 
 /// Open the inventory, or fall back to a throwaway database so the app can
@@ -256,7 +256,7 @@ fn open_store() -> (Store, Option<String>) {
     match Store::open_default() {
         Ok(store) => (store, None),
         Err(e) => {
-            let fallback = std::env::temp_dir().join("laninv-fallback.sqlite3");
+            let fallback = std::env::temp_dir().join("modern-ip-scanner-fallback.sqlite3");
             match Store::open(&fallback) {
                 Ok(store) => (
                     store,
@@ -267,7 +267,7 @@ fn open_store() -> (Store, Option<String>) {
                     )),
                 ),
                 Err(e2) => {
-                    eprintln!("laninv: cannot open any database: {e} / {e2}");
+                    eprintln!("modern-ip-scanner: cannot open any database: {e} / {e2}");
                     std::process::exit(1);
                 }
             }
@@ -298,5 +298,5 @@ fn main() {
             list_interfaces,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running laninv GUI");
+        .expect("error while running the Modern IP Scanner GUI");
 }

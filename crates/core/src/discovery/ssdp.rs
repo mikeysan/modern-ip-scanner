@@ -49,7 +49,7 @@ impl Strategy for Ssdp {
         let searches = [("ssdp:all", 2), ("upnp:rootdevice", 1)];
         for (st, mx) in &searches {
             let req = format!(
-                "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: {mx}\r\nST: {st}\r\nUSER-AGENT: laninv/0.1\r\n\r\n"
+                "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: {mx}\r\nST: {st}\r\nUSER-AGENT: modern-ip-scanner/0.1\r\n\r\n"
             );
             let _ = sock.send_to(req.as_bytes(), group);
         }
@@ -178,7 +178,7 @@ fn fetch_friendly_name(location: &str) -> Option<String> {
     // that embed it) simply never answer a 1.0 request. `Connection: close`
     // keeps read-to-EOF working without needing to parse Content-Length.
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nUser-Agent: laninv/0.1\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nUser-Agent: modern-ip-scanner/0.1\r\n\r\n"
     );
     stream.write_all(request.as_bytes()).ok()?;
 

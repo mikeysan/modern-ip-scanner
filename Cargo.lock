@@ -1857,53 +1857,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "laninv"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "laninv-core",
- "serde_json",
-]
-
-[[package]]
-name = "laninv-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dirs",
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "socket2",
- "tempfile",
- "thiserror 2.0.20",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "laninv-gui"
-version = "0.1.0"
-dependencies = [
- "laninv-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
-name = "laninv-helper"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "windows 0.62.2",
-]
-
-[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2050,6 +2003,53 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "modern-ip-scanner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "modern-ip-scanner-core",
+ "serde_json",
+]
+
+[[package]]
+name = "modern-ip-scanner-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dirs",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "modern-ip-scanner-gui"
+version = "0.1.0"
+dependencies = [
+ "modern-ip-scanner-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
+name = "modern-ip-scanner-helper"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "windows 0.62.2",
 ]
 
 [[package]]

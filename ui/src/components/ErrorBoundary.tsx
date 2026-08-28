@@ -24,7 +24,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("laninv UI crashed:", error, info.componentStack);
+    console.error("Modern IP Scanner UI crashed:", error, info.componentStack);
   }
 
   render() {

@@ -97,9 +97,9 @@ pub fn probe(iface: Option<&crate::model::Interface>) -> PrivilegeState {
 /// Platform file name of the helper binary.
 pub fn helper_file_name() -> &'static str {
     if cfg!(windows) {
-        "laninv-helper.exe"
+        "modern-ip-scanner-helper.exe"
     } else {
-        "laninv-helper"
+        "modern-ip-scanner-helper"
     }
 }
 
@@ -120,7 +120,11 @@ fn search_paths_from(
         paths.push(dir.join(helper_file_name()));
     }
     if cfg!(not(windows)) {
-        for dir in ["/usr/libexec/laninv", "/usr/lib/laninv", "/usr/local/bin"] {
+        for dir in [
+            "/usr/libexec/modern-ip-scanner",
+            "/usr/lib/modern-ip-scanner",
+            "/usr/local/bin",
+        ] {
             paths.push(std::path::Path::new(dir).join(helper_file_name()));
         }
     }
@@ -133,7 +137,7 @@ fn search_paths_from(
 /// missing.
 pub fn helper_search_paths() -> Vec<std::path::PathBuf> {
     let exe = std::env::current_exe().ok();
-    let override_path = std::env::var_os("LANINV_HELPER").map(std::path::PathBuf::from);
+    let override_path = std::env::var_os("MIPSCAN_HELPER").map(std::path::PathBuf::from);
     search_paths_from(
         exe.as_deref().and_then(|e| e.parent()),
         override_path.as_deref(),

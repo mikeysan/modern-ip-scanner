@@ -1,4 +1,4 @@
-//! Client side of the optional privileged helper (`laninv-helper`).
+//! Client side of the optional privileged helper (`modern-ip-scanner-helper`).
 //!
 //! Protocol: newline-delimited JSON, one request and one response per line.
 //! `arp-batch` resolves many addresses per request, which matters because
@@ -21,7 +21,7 @@ use std::time::Duration;
 #[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Most addresses to put in one `arp-batch`. Must not exceed the helper's own
-/// cap, which rejects anything larger; see `MAX_BATCH` in `laninv-helper`.
+/// cap, which rejects anything larger; see `MAX_BATCH` in `modern-ip-scanner-helper`.
 const MAX_BATCH: usize = 128;
 
 /// A quiet address costs the helper one ARP wait: about a second on Linux,
@@ -105,7 +105,7 @@ impl HelperClient {
             // is the JSON request channel — it would swallow the first
             // request as a password attempt and then fail.
             let launcher = which("pkexec").ok_or(
-                "pkexec not found; install polkit, or run laninv as root for full ARP coverage",
+                "pkexec not found; install polkit, or run mipscan as root for full ARP coverage",
             )?;
             let mut command = std::process::Command::new(launcher);
             command.arg(&path);
@@ -116,7 +116,7 @@ impl HelperClient {
     }
 
     /// Build a client around a child process that speaks the protocol on its
-    /// stdio (`laninv-helper --stdio`).
+    /// stdio (`modern-ip-scanner-helper --stdio`).
     ///
     /// Separate from `launch_stdio` so the protocol can be exercised against
     /// the real helper binary without a privilege prompt: the elevation is
@@ -204,7 +204,7 @@ impl HelperClient {
 
         let sid = Self::current_user_sid()?;
         let name = format!(
-            "laninv-{}-{}",
+            "mipscan-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -539,7 +539,7 @@ impl Write for PipeWriter {
 mod tests {
     use super::*;
 
-    /// `target/<profile>/laninv-helper[.exe]`, when the workspace has been
+    /// `target/<profile>/modern-ip-scanner-helper[.exe]`, when the workspace has been
     /// built. The test binary lives one level deeper, in `deps/`.
     fn helper_binary() -> Option<std::path::PathBuf> {
         let exe = std::env::current_exe().ok()?;
@@ -565,7 +565,7 @@ mod tests {
     fn each_request_gets_its_own_whole_reply() {
         let Some(bin) = helper_binary() else {
             eprintln!(
-                "SKIPPED each_request_gets_its_own_whole_reply: no laninv-helper \
+                "SKIPPED each_request_gets_its_own_whole_reply: no modern-ip-scanner-helper \
                  beside the test binary (build the workspace first)"
             );
             return;
@@ -604,7 +604,7 @@ mod tests {
     fn a_batch_answers_every_address_and_leaves_the_stream_in_step() {
         let Some(bin) = helper_binary() else {
             eprintln!(
-                "SKIPPED a_batch_answers_every_address_and_leaves_the_stream_in_step:                  no laninv-helper beside the test binary (build the workspace first)"
+                "SKIPPED a_batch_answers_every_address_and_leaves_the_stream_in_step:                  no modern-ip-scanner-helper beside the test binary (build the workspace first)"
             );
             return;
         };

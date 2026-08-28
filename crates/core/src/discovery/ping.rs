@@ -48,7 +48,7 @@ fn win_icmp(addr: IpAddr, timeout: Duration) -> bool {
         let Ok(handle) = IcmpCreateFile() else {
             return false;
         };
-        let payload = b"laninv-probe";
+        let payload = b"mipscan-probe";
         // MSDN: reply buffer must hold the struct + echoed data + 8 bytes.
         let mut reply_buf = [0u8; std::mem::size_of::<ICMP_ECHO_REPLY>() + 32];
         let timeout_ms = timeout.as_millis().clamp(1, u32::MAX as u128) as u32;

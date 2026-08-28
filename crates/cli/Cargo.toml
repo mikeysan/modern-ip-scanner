@@ -1,16 +1,16 @@
 [package]
-name = "laninv"
-description = "LAN inventory CLI (headless)"
+name = "modern-ip-scanner"
+description = "Modern IP Scanner CLI (headless)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "laninv"
+name = "mipscan"
 path = "src/main.rs"
 
 [dependencies]
-laninv-core = { path = "../core" }
+modern-ip-scanner-core = { path = "../core" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 serde_json = "1"

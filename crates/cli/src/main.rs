@@ -1,14 +1,14 @@
-//! `laninv` — headless LAN inventory CLI sharing the core with the GUI.
+//! `mipscan` — headless Modern IP Scanner CLI sharing the core with the GUI.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use laninv_core::model::{DeviceView, NetworkView, ScanReport, TransitionKind};
-use laninv_core::store::Store;
-use laninv_core::util::fmt_time;
+use modern_ip_scanner_core::model::{DeviceView, NetworkView, ScanReport, TransitionKind};
+use modern_ip_scanner_core::store::Store;
+use modern_ip_scanner_core::util::fmt_time;
 
 #[derive(Parser)]
 #[command(
-    name = "laninv",
+    name = "mipscan",
     version,
     about = "LAN inventory & diff scanner — remembers your networks and devices",
     long_about = "An inventory-first LAN scanner: every scan tells you what's new, what changed, \
@@ -36,7 +36,7 @@ enum Command {
     },
     /// List remembered devices (optionally scoped to a network).
     Devices {
-        /// Network key (see `laninv networks`). Omit for all networks.
+        /// Network key (see `mipscan networks`). Omit for all networks.
         #[arg(long)]
         network: Option<String>,
     },
@@ -48,7 +48,7 @@ enum Command {
     },
     /// Assign a persistent user name (and optional notes) to a device.
     Name {
-        /// Device id or key (see `laninv devices`).
+        /// Device id or key (see `mipscan devices`).
         device: String,
         /// The name to assign.
         name: Option<String>,
@@ -62,7 +62,7 @@ enum Command {
     Networks,
     /// Give a remembered network a label ("Home", "Office 3F").
     Label {
-        /// Network key or its displayed prefix (see `laninv networks`).
+        /// Network key or its displayed prefix (see `mipscan networks`).
         network: String,
         /// The label to assign.
         label: String,
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
 
     match &cli.command {
         Command::Scan { strategies, helper } => {
-            let opts = laninv_core::ScanOptions {
+            let opts = modern_ip_scanner_core::ScanOptions {
                 strategies: if strategies.is_empty() {
                     None
                 } else {
@@ -105,8 +105,8 @@ fn main() -> Result<()> {
                 use_helper: *helper,
             };
             let mut progress = |msg: &str| eprintln!("  {msg}");
-            let report =
-                laninv_core::run_scan(&mut store, &opts, &mut progress).context("scan failed")?;
+            let report = modern_ip_scanner_core::run_scan(&mut store, &opts, &mut progress)
+                .context("scan failed")?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
             let nk = match network {
                 Some(k) => k.clone(),
                 None => most_recent_network(&store)
-                    .context("no scans recorded yet — run `laninv scan` first")?,
+                    .context("no scans recorded yet — run `mipscan scan` first")?,
             };
             let (scan_id, at) = store
                 .last_scan_for_network(&nk)?
@@ -248,7 +248,7 @@ fn main() -> Result<()> {
         Command::Export { network, format } => match format.as_str() {
             "csv" => {
                 let devices = store.list_devices(network.as_deref())?;
-                print!("{}", laninv_core::export::devices_csv(&devices));
+                print!("{}", modern_ip_scanner_core::export::devices_csv(&devices));
             }
             "json" => {
                 let devices = store.list_devices(network.as_deref())?;
@@ -314,7 +314,7 @@ fn print_report(report: &ScanReport) {
     print_transitions(&report.transitions);
 }
 
-fn print_transitions(transitions: &[laninv_core::model::Transition]) {
+fn print_transitions(transitions: &[modern_ip_scanner_core::model::Transition]) {
     if transitions.is_empty() {
         println!("  no changes since last scan");
         return;
@@ -353,7 +353,7 @@ fn print_transitions(transitions: &[laninv_core::model::Transition]) {
     if transitions.iter().any(|t| t.unstable_identity) {
         println!(
             "  note: devices marked \"randomised identity\" change their MAC by design.\n\
-             \x20       laninv cannot follow them across rotations, so it never reports\n\
+             \x20       mipscan cannot follow them across rotations, so it never reports\n\
              \x20       them gone. Give one a name to make it trackable."
         );
     }
@@ -361,7 +361,7 @@ fn print_transitions(transitions: &[laninv_core::model::Transition]) {
 
 fn print_devices(devices: &[DeviceView]) {
     if devices.is_empty() {
-        println!("no devices recorded — run `laninv scan` first");
+        println!("no devices recorded — run `mipscan scan` first");
         return;
     }
     println!(
@@ -395,7 +395,7 @@ fn print_devices(devices: &[DeviceView]) {
 
 fn print_networks(networks: &[NetworkView]) {
     if networks.is_empty() {
-        println!("no networks remembered yet — run `laninv scan` first");
+        println!("no networks remembered yet — run `mipscan scan` first");
         return;
     }
     println!(
@@ -414,9 +414,9 @@ fn print_networks(networks: &[NetworkView]) {
     }
 }
 
-fn format_event(e: &laninv_core::model::HistoryEvent) -> String {
+fn format_event(e: &modern_ip_scanner_core::model::HistoryEvent) -> String {
     match e {
-        laninv_core::model::HistoryEvent::Observation {
+        modern_ip_scanner_core::model::HistoryEvent::Observation {
             at,
             ip,
             mac,
@@ -431,7 +431,7 @@ fn format_event(e: &laninv_core::model::HistoryEvent) -> String {
             hostname.as_deref().unwrap_or("?"),
             source
         ),
-        laninv_core::model::HistoryEvent::Transition {
+        modern_ip_scanner_core::model::HistoryEvent::Transition {
             at, kind, changes, ..
         } => {
             let extra: Vec<String> = changes
@@ -447,7 +447,7 @@ fn format_event(e: &laninv_core::model::HistoryEvent) -> String {
                 .collect();
             format!("{} {} {}", fmt_time(*at), kind.as_str(), extra.join(", "))
         }
-        laninv_core::model::HistoryEvent::Named { at, name } => {
+        modern_ip_scanner_core::model::HistoryEvent::Named { at, name } => {
             format!("{} named \"{}\"", fmt_time(*at), name)
         }
     }
