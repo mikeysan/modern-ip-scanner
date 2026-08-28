@@ -65,7 +65,6 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .statusline .error { color: var(--bad); }
 
 .main { flex: 1; display: flex; overflow: hidden; }
-.devices { flex: 1; overflow: auto; }
 .detail {
   width: 360px; border-left: 1px solid var(--border); background: var(--bg-raise);
   padding: 14px 16px; overflow: auto;
@@ -176,7 +175,14 @@ table.devices tr.selected { background: var(--bg-hover); outline: 1px solid var(
   overflow: hidden;
 }
 
-/* The table used to be the flex child of .main and took `.devices { flex: 1 }`
+/* Both tables scroll inside this instead of being flex children of .main.
+   A table that is itself the flex child takes `flex: 1` and stretches to the
+   full height; because table cells are vertically centred by default, a short
+   list then sits in the middle of an empty pane. That happened twice — to the
+   devices table, and then unnoticed to the networks table.
+
+   The old comment, kept because it explains the shape:
+   The table used to be the flex child of .main and took `.devices { flex: 1 }`
    from that rule. Inside the pane it must size to its content instead, or the
    rows stretch to fill the height. */
 .table-scroll {
