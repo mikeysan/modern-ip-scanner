@@ -37,7 +37,8 @@ ui/             React + TypeScript frontend
 
 ## Build & run
 
-Requires Rust (MSVC toolchain on Windows) and Node.js for the UI.
+Requires Rust (MSVC toolchain on Windows) and Node.js for the UI —
+Node 20.19+ or 22.12+, which is what Vite 8 needs.
 
 ```bash
 cargo build --workspace          # binaries land in target/debug
