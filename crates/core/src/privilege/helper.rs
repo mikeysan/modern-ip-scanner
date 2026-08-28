@@ -96,14 +96,22 @@ impl HelperClient {
 
     #[cfg(target_os = "linux")]
     fn launch_stdio(path: std::path::PathBuf) -> Result<HelperClient, String> {
-        // pkexec only. `sudo` reads its password prompt from stdin, which is
-        // the JSON request channel — it would swallow the first request as a
-        // password attempt and then fail.
-        let launcher = which("pkexec").ok_or(
-            "pkexec not found; install polkit, or run laninv as root for full ARP coverage",
-        )?;
-        let mut command = std::process::Command::new(launcher);
-        command.arg(&path).arg("--stdio");
+        // Already privileged: pkexec would only add a prompt, and is absent on
+        // plenty of headless systems. Run the helper directly.
+        let mut command = if unsafe { libc::geteuid() } == 0 {
+            std::process::Command::new(&path)
+        } else {
+            // pkexec only. `sudo` reads its password prompt from stdin, which
+            // is the JSON request channel — it would swallow the first
+            // request as a password attempt and then fail.
+            let launcher = which("pkexec").ok_or(
+                "pkexec not found; install polkit, or run laninv as root for full ARP coverage",
+            )?;
+            let mut command = std::process::Command::new(launcher);
+            command.arg(&path);
+            command
+        };
+        command.arg("--stdio");
         Self::from_command(command)
     }
 

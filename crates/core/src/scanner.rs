@@ -377,7 +377,7 @@ pub fn run_scan(
         priv_state.notes.push(note.into());
     }
     if plan == HelperPlan::Launch {
-        progress("launching privileged helper (elevation prompt)...");
+        progress("launching privileged helper (may prompt for elevation)...");
         match crate::privilege::helper::HelperClient::launch() {
             Ok(mut h) => {
                 // Verify it answers before trusting it.
@@ -688,8 +688,10 @@ fn build_arp_resolver(
     priv_state: &PrivilegeState,
     helper: &SharedHelper,
 ) -> SharedResolver {
-    // Prefer native ARP (Windows SendARP works unprivileged); fall back to
-    // the helper; finally the neighbor cache.
+    // Prefer native ARP (Windows SendARP works unprivileged), then the
+    // helper. The neighbor cache is not consulted here: the caller applies it
+    // once per batch, because doing it per address re-read the whole table
+    // for every address that failed to resolve.
     let native_ok = native_arp_available(priv_state);
     let _ = iface;
     let helper = std::sync::Arc::clone(helper);
@@ -704,11 +706,7 @@ fn build_arp_resolver(
                 return Some(mac);
             }
         }
-        // Neighbor-cache fallback (always available, no packets).
-        crate::netenv::neighbor_entries()
-            .iter()
-            .find(|e| e.ip == ip)
-            .map(|e| e.mac.clone())
+        None
     })
 }
 
@@ -742,7 +740,7 @@ fn build_arp_batch_resolver(
                 }
             }
         }
-        parallel_resolve(ips, &single, concurrency)
+        fill_from_neighbor_cache(ips, parallel_resolve(ips, &single, concurrency))
     })
 }
 

@@ -8,6 +8,21 @@ pub mod helper;
 use crate::model::{Capability, PrivilegeState};
 use crate::netenv;
 
+/// Whether ARP resolution is genuinely available to the scanner itself.
+///
+/// Permission is not capability. On Linux root may open a raw AF_PACKET
+/// socket, but the scanner has no ARP built on one -- the helper is the
+/// implementation. Granting the capability for permission alone let
+/// `arp-ping` sweep 4096 addresses in 73ms, resolve none of them, and then
+/// report the failure as a vanished gateway.
+fn arp_capability(raw_sockets_permitted: bool, native_arp_works: bool) -> bool {
+    // Only an implementation counts. Permission with nothing behind it is
+    // not a capability, and claiming it is worse than admitting the gap:
+    // `arp-ping` reads the capability as licence to sweep.
+    let _ = raw_sockets_permitted;
+    native_arp_works
+}
+
 /// Probe what actually works right now on this machine/interface.
 pub fn probe(iface: Option<&crate::model::Interface>) -> PrivilegeState {
     let mut state = PrivilegeState::default();
@@ -41,7 +56,8 @@ pub fn probe(iface: Option<&crate::model::Interface>) -> PrivilegeState {
     {
         if let Some(iface) = iface {
             if let Some(gw) = &iface.gateway_v4 {
-                if crate::discovery::ping::native_arp_resolve(gw, 1000).is_some() {
+                let native = crate::discovery::ping::native_arp_resolve(gw, 1000).is_some();
+                if arp_capability(false, native) {
                     state.capabilities.push(Capability::ArpResolve);
                 } else {
                     state.notes.push("SendARP failed for gateway".into());
@@ -55,8 +71,19 @@ pub fn probe(iface: Option<&crate::model::Interface>) -> PrivilegeState {
     {
         // The interface only matters to the Windows SendARP probe.
         let _ = iface;
-        if crate::discovery::ping::raw_socket_capability() {
+        let raw_ok = crate::discovery::ping::raw_socket_capability();
+        // There is no native ARP in the scanner on Linux: `native_arp_resolve`
+        // is a stub and the helper holds the only implementation. So the
+        // answer here is always no, and the note explains which of the two
+        // reasons applies.
+        if arp_capability(raw_ok, false) {
             state.capabilities.push(Capability::ArpResolve);
+        } else if raw_ok {
+            state.notes.push(
+                "running with raw-socket privilege, but ARP resolution lives in the \
+                 privileged helper: pass --helper for full ARP coverage (no prompt as root)"
+                    .into(),
+            );
         } else {
             state
                 .notes
@@ -130,6 +157,17 @@ pub fn neighbors_for(iface: &crate::model::Interface) -> Vec<crate::model::Neigh
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// Being allowed to open a raw socket is not the same as having an ARP
+    /// implementation. On Linux the scanner has none -- the helper does -- so
+    /// root alone must not satisfy `arp-ping`'s requirement.
+    #[test]
+    fn permission_without_an_implementation_is_not_a_capability() {
+        assert!(!arp_capability(true, false), "root alone is not enough");
+        assert!(arp_capability(false, true), "a working native ARP is");
+        assert!(arp_capability(true, true));
+        assert!(!arp_capability(false, false));
+    }
 
     #[test]
     fn an_explicit_override_is_searched_first() {
