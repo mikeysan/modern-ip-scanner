@@ -6,9 +6,18 @@ name: CI
 # happened (see REVIEW.md, B2).
 
 on:
+  # `pull_request` already covers a branch on its way in. Without this
+  # filter a push to a PR branch fires both events and runs every job twice.
+  # Use the manual trigger for a branch that has no PR yet.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A newer push to the same ref makes the older run's remaining jobs pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,6 +38,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # Keyed on the lockfile and toolchain, so it only rebuilds what changed.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Format
         run: cargo fmt --all --check
@@ -51,6 +62,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Worth far more here than in `core`: without it every run recompiles
+      # the whole GTK/WebKit dependency tree.
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
