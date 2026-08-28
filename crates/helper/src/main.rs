@@ -6,8 +6,9 @@
 //!   {"op":"shutdown"} closes the helper.
 //!
 //! Modes:
-//!   --stdio  : serve on stdin/stdout (launched via sudo/pkexec on Linux)
-//!   --pipe N : serve named pipe \\.\pipe\N (launched via UAC runas on Windows)
+//!   --stdio             : serve on stdin/stdout (launched via pkexec on Linux)
+//!   --pipe N --owner S  : serve named pipe \\.\pipe\N, restricted to SID S
+//!                         (launched via UAC on Windows)
 //!
 //! Attack surface is deliberately tiny: the only operation is ARP resolution
 //! of a dotted-quad IPv4 string. No file access, no shell, no arbitrary ops.
@@ -44,10 +45,21 @@ fn main() {
         .position(|a| a == "--pipe")
         .and_then(|i| args.get(i + 1).cloned())
     {
-        std::process::exit(serve_pipe(&pipe));
+        // Fail closed: without an owner there is nobody to restrict the pipe
+        // to, and an unrestricted pipe into an elevated process is the bug
+        // this argument exists to fix.
+        let Some(owner) = args
+            .iter()
+            .position(|a| a == "--owner")
+            .and_then(|i| args.get(i + 1).cloned())
+        else {
+            eprintln!("laninv-helper: --pipe requires --owner <sid>");
+            std::process::exit(2);
+        };
+        std::process::exit(serve_pipe(&pipe, &owner));
     }
     {
-        eprintln!("laninv-helper: usage: --stdio | --pipe NAME");
+        eprintln!("laninv-helper: usage: --stdio | --pipe NAME --owner SID");
         eprintln!("This binary is launched by laninv; running it by hand does nothing useful.");
         std::process::exit(2);
     }
@@ -203,6 +215,43 @@ mod arp {
     }
 }
 
+/// Access control for the helper's pipe.
+///
+/// Deliberately `#[cfg]`-free so both builds check it and both test runs
+/// exercise it: this decides who may talk to a process running as
+/// Administrator.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod pipe_acl {
+    /// True for a well-formed SID string (`S-1-5-21-...`).
+    ///
+    /// The value is interpolated into an SDDL string, so anything that is not
+    /// a SID must be refused rather than escaped — an attacker-chosen string
+    /// here would rewrite the whole DACL.
+    pub fn is_valid_sid(sid: &str) -> bool {
+        let Some(rest) = sid.strip_prefix("S-1-") else {
+            return false;
+        };
+        !rest.is_empty()
+            && rest
+                .split('-')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    }
+
+    /// Build the pipe's security descriptor: full control for local
+    /// administrators, read/write for exactly the user that launched us, and
+    /// nobody else.
+    pub fn sddl_for_owner(sid: &str) -> Option<String> {
+        if !is_valid_sid(sid) {
+            return None;
+        }
+        // D:P  -- protected: no inherited entries widen this.
+        // BA   -- local administrators keep full control.
+        // <sid>-- the launching user, read and write only.
+        // Everyone (WD) is deliberately absent.
+        Some(format!("D:P(A;;GA;;;BA)(A;;GRGW;;;{sid})"))
+    }
+}
+
 fn serve_stdio() {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -263,8 +312,65 @@ mod arp_windows {
     }
 }
 
+/// Confirm the connected client really is the user we were launched for.
+///
+/// The DACL should already have made this impossible, but the pipe is the one
+/// interface into a process running as Administrator, so it is worth checking
+/// rather than assuming.
 #[cfg(windows)]
-fn serve_pipe(name: &str) -> i32 {
+unsafe fn client_is(pipe: windows::Win32::Foundation::HANDLE, expected_sid: &str) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{
+        GetTokenInformation, RevertToSelf, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows::Win32::System::Pipes::ImpersonateNamedPipeClient;
+    use windows::Win32::System::Threading::OpenThreadToken;
+
+    if ImpersonateNamedPipeClient(pipe).is_err() {
+        return false;
+    }
+    let mut token = HANDLE::default();
+    let opened = OpenThreadToken(
+        windows::Win32::System::Threading::GetCurrentThread(),
+        TOKEN_QUERY,
+        true,
+        &mut token,
+    );
+    let _ = RevertToSelf();
+    if opened.is_err() {
+        return false;
+    }
+
+    let mut needed = 0u32;
+    let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
+    let mut buf = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        token,
+        TokenUser,
+        Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+        needed,
+        &mut needed,
+    );
+    let mut matches = false;
+    if ok.is_ok() {
+        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut raw = windows::core::PWSTR::null();
+        if ConvertSidToStringSidW(user.User.Sid, &mut raw).is_ok() {
+            matches = raw
+                .to_string()
+                .is_ok_and(|s| s.eq_ignore_ascii_case(expected_sid));
+            let _ = windows::Win32::Foundation::LocalFree(Some(
+                windows::Win32::Foundation::HLOCAL(raw.0 as *mut core::ffi::c_void),
+            ));
+        }
+    }
+    let _ = CloseHandle(token);
+    matches
+}
+
+#[cfg(windows)]
+fn serve_pipe(name: &str, owner_sid: &str) -> i32 {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Security::SECURITY_ATTRIBUTES;
@@ -276,12 +382,11 @@ fn serve_pipe(name: &str) -> i32 {
     use windows::Win32::System::Pipes::PIPE_TYPE_BYTE;
     use windows::Win32::System::Pipes::PIPE_WAIT;
 
-    // SDDL: owner = administrators, but grant read/write to Everyone so the
-    // unelevated client can connect. The only op exposed is ARP resolution.
-    let sddl: Vec<u16> = "D:P(A;;GWGR;;;WD)(A;;GA;;;BA)"
-        .encode_utf16()
-        .chain([0])
-        .collect();
+    let Some(descriptor) = pipe_acl::sddl_for_owner(owner_sid) else {
+        eprintln!("laninv-helper: refusing to serve: --owner is not a valid SID");
+        return 2;
+    };
+    let sddl: Vec<u16> = descriptor.encode_utf16().chain([0]).collect();
     let mut sd = windows::Win32::Security::PSECURITY_DESCRIPTOR(std::ptr::null_mut());
     unsafe {
         let ok = windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -329,6 +434,17 @@ fn serve_pipe(name: &str) -> i32 {
     let connected = unsafe { ConnectNamedPipe(pipe, None) };
     if connected.is_err() {
         let _ = unsafe { CloseHandle(pipe) };
+        unsafe {
+            windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(sd.0)));
+        };
+        return 1;
+    }
+    if !unsafe { client_is(pipe, owner_sid) } {
+        eprintln!("laninv-helper: rejecting a client that is not the launching user");
+        let _ = unsafe { CloseHandle(pipe) };
+        unsafe {
+            windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(sd.0)));
+        };
         return 1;
     }
 
@@ -539,9 +655,64 @@ mod arp_linux {
 
 #[cfg(test)]
 mod tests {
-    use super::arp;
+    use super::{arp, pipe_acl};
 
     const SRC_MAC: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+
+    #[test]
+    fn only_well_formed_sids_are_accepted() {
+        assert!(pipe_acl::is_valid_sid(
+            "S-1-5-21-3623811015-3361044348-30300820-1013"
+        ));
+        assert!(pipe_acl::is_valid_sid("S-1-5-18"));
+        for bad in [
+            "",
+            "S-1-5-21-x",
+            "BA",
+            "WD",
+            // The reason validation exists at all: an unchecked value is
+            // interpolated straight into the DACL.
+            "S-1-5-18)(A;;GA;;;WD",
+            "S-1-5-18;;;WD",
+            "s-1-5-18",
+            "S-1-5-18 ",
+        ] {
+            assert!(!pipe_acl::is_valid_sid(bad), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_descriptor_grants_the_launching_user_and_nobody_else() {
+        let sid = "S-1-5-21-3623811015-3361044348-30300820-1013";
+        let sddl = pipe_acl::sddl_for_owner(sid).expect("valid sid");
+        assert!(
+            sddl.starts_with("D:P"),
+            "the DACL must be protected: {sddl}"
+        );
+        assert!(
+            sddl.contains(&format!("(A;;GRGW;;;{sid})")),
+            "the launching user needs read/write: {sddl}"
+        );
+        assert!(
+            sddl.contains("(A;;GA;;;BA)"),
+            "administrators keep full control: {sddl}"
+        );
+        assert!(
+            !sddl.contains(";;;WD)"),
+            "Everyone must not appear anywhere: {sddl}"
+        );
+        assert!(
+            !sddl.contains(";;;AU)") && !sddl.contains(";;;IU)"),
+            "no broad groups either: {sddl}"
+        );
+    }
+
+    #[test]
+    fn a_bad_sid_yields_no_descriptor_rather_than_a_permissive_one() {
+        assert_eq!(pipe_acl::sddl_for_owner("WD"), None);
+        assert_eq!(pipe_acl::sddl_for_owner("S-1-5-18)(A;;GA;;;WD"), None);
+        assert_eq!(pipe_acl::sddl_for_owner(""), None);
+    }
 
     #[test]
     fn a_dotted_quad_parses_to_a_host_order_u32() {

@@ -2,8 +2,10 @@
 //!
 //! Protocol: newline-delimited JSON, one request and one response per line.
 //! - Linux: helper is spawned via `pkexec` and speaks over stdio.
-//! - Windows: helper is spawned elevated via `ShellExecuteW(runas)` and
-//!   serves a named pipe the client connects to.
+//! - Windows: helper is spawned elevated via `ShellExecuteEx(runas)` and
+//!   serves a named pipe restricted to the launching user's SID. Both ends
+//!   authenticate: the helper checks the connecting client's token, and the
+//!   client checks that the pipe is served by the process it launched.
 //!
 //! The helper is optional everywhere: when `launch` fails, callers degrade
 //! gracefully and scans lose only the full-ARP coverage.
@@ -95,6 +97,44 @@ impl HelperClient {
         })
     }
 
+    /// This process's user SID, as an `S-1-...` string.
+    ///
+    /// Handed to the elevated helper so it can restrict its pipe to exactly
+    /// this user instead of everyone on the machine.
+    #[cfg(windows)]
+    fn current_user_sid() -> Result<String, String> {
+        use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+        use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+        use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        unsafe {
+            let mut token = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)
+                .map_err(|e| format!("cannot read this process's token: {e}"))?;
+            let mut needed = 0u32;
+            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
+            let mut buf = vec![0u8; needed as usize];
+            let got = GetTokenInformation(
+                token,
+                TokenUser,
+                Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+                needed,
+                &mut needed,
+            );
+            let _ = CloseHandle(token);
+            got.map_err(|e| format!("cannot read this process's user: {e}"))?;
+
+            let user = &*(buf.as_ptr() as *const TOKEN_USER);
+            let mut raw = windows::core::PWSTR::null();
+            ConvertSidToStringSidW(user.User.Sid, &mut raw)
+                .map_err(|e| format!("cannot format this process's SID: {e}"))?;
+            let sid = raw.to_string().map_err(|_| "SID was not valid UTF-16")?;
+            let _ = LocalFree(Some(HLOCAL(raw.0 as *mut core::ffi::c_void)));
+            Ok(sid)
+        }
+    }
+
     #[cfg(windows)]
     fn launch_pipe(path: std::path::PathBuf) -> Result<HelperClient, String> {
         use windows::core::PCWSTR;
@@ -103,11 +143,19 @@ impl HelperClient {
         use windows::Win32::Storage::FileSystem::CreateFileW;
         use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
         use windows::Win32::Storage::FileSystem::OPEN_EXISTING;
-        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION;
+        use windows::Win32::Storage::FileSystem::SECURITY_SQOS_PRESENT;
+        use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+        use windows::Win32::System::Threading::GetProcessId;
+        use windows::Win32::UI::Shell::{
+            ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+        };
         use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
+        let sid = Self::current_user_sid()?;
         let name = format!(
-            "laninv-{}",
+            "laninv-{}-{}",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -122,20 +170,28 @@ impl HelperClient {
             .encode_utf16()
             .chain([0])
             .collect();
-        let args = format!("--pipe {name}");
+        // The SID is not a secret; the pipe's DACL, not the argument, is what
+        // keeps other users out.
+        let args = format!("--pipe {name} --owner {sid}");
         let args_utf: Vec<u16> = args.encode_utf16().chain([0]).collect();
-        let rc = unsafe {
-            ShellExecuteW(
-                None,
-                PCWSTR(verb.as_ptr()),
-                PCWSTR(file.as_ptr()),
-                PCWSTR(args_utf.as_ptr()),
-                None,
-                SW_HIDE,
-            )
+
+        // ShellExecuteEx rather than ShellExecute: we need the process handle
+        // to prove later that the pipe we connected to is the helper we
+        // launched, and not something that squatted the name first.
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS,
+            lpVerb: PCWSTR(verb.as_ptr()),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(args_utf.as_ptr()),
+            nShow: SW_HIDE.0,
+            ..Default::default()
         };
-        if rc.0 as isize <= 32 {
-            return Err("elevation declined (ShellExecuteW runas failed)".into());
+        unsafe { ShellExecuteExW(&mut info) }
+            .map_err(|_| "elevation declined (UAC prompt refused)".to_string())?;
+        let helper_pid = unsafe { GetProcessId(info.hProcess) };
+        if helper_pid == 0 {
+            return Err("could not identify the helper process".into());
         }
 
         let wide: Vec<u16> = pipe_name.encode_utf16().chain([0]).collect();
@@ -148,11 +204,27 @@ impl HelperClient {
                     Default::default(),
                     None,
                     OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
+                    // Let the helper read who we are so it can check us
+                    // against the SID it was launched for. Identification,
+                    // not Impersonation: it needs to *know* the caller, not
+                    // to act as them. Without an explicit level Windows
+                    // treats the client as anonymous and the check fails.
+                    FILE_ATTRIBUTE_NORMAL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                     None,
                 )
             };
             if let Ok(h) = handle {
+                // Mutual authentication: the helper checked us via the pipe's
+                // DACL and an impersonation check; this is us checking it.
+                let mut server_pid = 0u32;
+                let identified = unsafe { GetNamedPipeServerProcessId(h, &mut server_pid) }.is_ok();
+                if !identified || server_pid != helper_pid {
+                    let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
+                    return Err(
+                        "the helper pipe is served by a different process; refusing to use it"
+                            .into(),
+                    );
+                }
                 let pipe = PipeHandle(h);
                 return Ok(HelperClient {
                     writer: Box::new(PipeWriter(pipe.clone())),

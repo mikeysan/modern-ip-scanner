@@ -74,6 +74,10 @@ Full ARP coverage (every address in the prefix, definitive up/down) needs
 elevation on Linux (`pkexec` + raw socket) and helps on locked-down Windows
 (`SendARP` via a UAC-elevated helper serving a named pipe).
 
+The pipe is restricted to the launching user's SID and both ends
+authenticate: the helper checks the connecting client's token, and the client
+checks that the pipe is served by the process it launched.
+
 - CLI: `laninv scan --helper`
 - GUI: tick **helper** before scanning (shown when the helper binary is
   found; Settings lists every path that is checked).
