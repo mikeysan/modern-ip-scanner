@@ -35,6 +35,8 @@ pub enum ScanError {
     NoIpv4(String),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("unknown strategy id(s): {0}. Valid ids: {1}")]
+    UnknownStrategy(String, String),
 }
 
 /// Progress callback for frontends.
@@ -282,12 +284,60 @@ fn resolve_and_diff(
     })
 }
 
+/// What to do about the privileged helper for this scan.
+#[derive(Debug, PartialEq, Eq)]
+enum HelperPlan {
+    /// The caller did not ask for it.
+    NotRequested,
+    /// The caller asked, but ARP already resolves without it. Saying so
+    /// matters: `--helper` used to be silently ignored on Windows, where
+    /// SendARP works unprivileged, so the flag produced no prompt, no
+    /// helper and no explanation.
+    NotNeeded,
+    /// The caller asked and it would add coverage.
+    Launch,
+}
+
+fn helper_plan(use_helper: bool, has_arp_resolve: bool) -> HelperPlan {
+    match (use_helper, has_arp_resolve) {
+        (false, _) => HelperPlan::NotRequested,
+        (true, true) => HelperPlan::NotNeeded,
+        (true, false) => HelperPlan::Launch,
+    }
+}
+
+/// Requested strategy ids that no strategy answers to.
+///
+/// A typo used to select nothing at all and still report a clean scan, which
+/// looks exactly like a network that has gone quiet.
+fn unknown_strategies(requested: &[String]) -> Vec<String> {
+    let known = crate::discovery::strategy_ids();
+    requested
+        .iter()
+        .filter(|r| !known.contains(&r.as_str()))
+        .cloned()
+        .collect()
+}
+
 pub fn run_scan(
     store: &mut Store,
     opts: &ScanOptions,
     progress: ProgressFn<'_>,
 ) -> Result<ScanReport, ScanError> {
     let started_at = now();
+
+    // Reject a misspelt id up front, before any packets: silently selecting
+    // no strategies produces a clean-looking scan of an empty network, which
+    // is indistinguishable from every device having vanished.
+    if let Some(requested) = opts.strategies.as_deref() {
+        let unknown = unknown_strategies(requested);
+        if !unknown.is_empty() {
+            return Err(ScanError::UnknownStrategy(
+                unknown.join(", "),
+                crate::discovery::strategy_ids().join(", "),
+            ));
+        }
+    }
 
     // 1. Interface selection + privilege probe.
     let ifaces = crate::netenv::interfaces();
@@ -304,7 +354,16 @@ pub fn run_scan(
     let mut priv_state = crate::privilege::probe(Some(&iface));
     let helper: std::sync::Arc<std::sync::Mutex<Option<crate::privilege::helper::HelperClient>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
-    if opts.use_helper && !priv_state.has(crate::model::Capability::ArpResolve) {
+    let plan = helper_plan(
+        opts.use_helper,
+        priv_state.has(crate::model::Capability::ArpResolve),
+    );
+    if plan == HelperPlan::NotNeeded {
+        let note = "helper not launched: ARP already resolves without it";
+        progress(note);
+        priv_state.notes.push(note.into());
+    }
+    if plan == HelperPlan::Launch {
         progress("launching privileged helper (elevation prompt)...");
         match crate::privilege::helper::HelperClient::launch() {
             Ok(mut h) => {
@@ -1013,5 +1072,28 @@ mod tests {
         absorb_outcome("arp-cache", outcome, &mut observations, &mut problems);
         assert_eq!(observations.len(), 1);
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn asking_for_the_helper_when_arp_already_works_is_reported_not_ignored() {
+        assert_eq!(helper_plan(true, true), HelperPlan::NotNeeded);
+        assert_eq!(helper_plan(true, false), HelperPlan::Launch);
+        assert_eq!(helper_plan(false, false), HelperPlan::NotRequested);
+        assert_eq!(helper_plan(false, true), HelperPlan::NotRequested);
+    }
+
+    #[test]
+    fn a_misspelt_strategy_id_is_named_rather_than_matching_nothing() {
+        let requested = vec!["arp-ping".to_string(), "neighbor".to_string()];
+        assert_eq!(unknown_strategies(&requested), vec!["neighbor".to_string()]);
+    }
+
+    #[test]
+    fn every_real_strategy_id_is_accepted() {
+        let all: Vec<String> = crate::discovery::strategy_ids()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(unknown_strategies(&all).is_empty());
     }
 }

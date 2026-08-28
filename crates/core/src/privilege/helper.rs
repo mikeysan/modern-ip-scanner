@@ -10,27 +10,39 @@
 //! The helper is optional everywhere: when `launch` fails, callers degrade
 //! gracefully and scans lose only the full-ARP coverage.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::time::Duration;
 
 /// How long to wait for the elevated helper's pipe to appear (Windows only:
 /// the Linux launcher gets its pipes from the child process directly).
 #[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
-/// The helper's own ARP wait is one second, so anything beyond this means it
-/// has wedged rather than that the address is quiet.
+/// A quiet address costs the helper one ARP wait: about a second on Linux,
+/// and up to ~3.2s on Windows, where SendARP retries internally. Measured at
+/// 3.17s against a silent address, so this budget is deliberately well clear
+/// of a slow answer -- anything beyond it means the helper has wedged.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// "Is a byte available to read right now?", for one specific transport.
+type ReadyProbe = Box<dyn FnMut(Duration) -> Result<bool, String> + Send>;
+
 pub struct HelperClient {
-    #[cfg(target_os = "linux")]
-    child: std::process::Child,
-    /// Raw fd of the child's stdout, for readiness polling.
-    #[cfg(target_os = "linux")]
-    stdout_fd: std::os::fd::RawFd,
+    /// The child process, when the transport is one. Kept so `shutdown` can
+    /// reap it.
+    child: Option<std::process::Child>,
     writer: Box<dyn Write + Send>,
-    reader: Box<dyn BufRead + Send>,
+    /// Deliberately unbuffered -- see `ready`.
+    reader: Box<dyn std::io::Read + Send>,
+    /// Answers "is a byte waiting?" for the *same* buffer `reader` draws
+    /// from, and is stored beside it so the two cannot drift apart.
+    ///
+    /// This pairing is the whole point: the probe asks the operating system
+    /// what is in the pipe, so a reader that buffers ahead of it would move
+    /// bytes somewhere the probe cannot see them. Every reply would then
+    /// strand after its first byte and time out. Do not wrap `reader`.
+    ready: ReadyProbe,
     #[cfg(windows)]
-    _pipe: PipeHandle,
+    _pipe: Option<PipeHandle>,
     /// Set once the helper stops answering; every later request fails fast.
     dead: bool,
 }
@@ -72,27 +84,45 @@ impl HelperClient {
 
     #[cfg(target_os = "linux")]
     fn launch_stdio(path: std::path::PathBuf) -> Result<HelperClient, String> {
-        use std::process::{Command, Stdio};
         // pkexec only. `sudo` reads its password prompt from stdin, which is
         // the JSON request channel — it would swallow the first request as a
         // password attempt and then fail.
         let launcher = which("pkexec").ok_or(
             "pkexec not found; install polkit, or run laninv as root for full ARP coverage",
         )?;
-        let mut command = Command::new(launcher);
+        let mut command = std::process::Command::new(launcher);
         command.arg(&path).arg("--stdio");
+        Self::from_command(command)
+    }
+
+    /// Build a client around a child process that speaks the protocol on its
+    /// stdio (`laninv-helper --stdio`).
+    ///
+    /// Separate from `launch_stdio` so the protocol can be exercised against
+    /// the real helper binary without a privilege prompt: the elevation is
+    /// the launcher's business, not the protocol's.
+    #[cfg(any(target_os = "linux", all(windows, test)))]
+    fn from_command(mut command: std::process::Command) -> Result<HelperClient, String> {
+        use std::process::Stdio;
         command.stdin(Stdio::piped()).stdout(Stdio::piped());
         let mut child = command
             .spawn()
-            .map_err(|e| format!("failed to spawn pkexec: {e}"))?;
+            .map_err(|e| format!("failed to spawn helper: {e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
-        let stdout_fd = std::os::fd::AsRawFd::as_raw_fd(&stdout);
+        #[cfg(target_os = "linux")]
+        let ready = poll_probe(std::os::fd::AsRawFd::as_raw_fd(&stdout));
+        #[cfg(windows)]
+        let ready = peek_probe(PipeHandle(windows::Win32::Foundation::HANDLE(
+            std::os::windows::io::AsRawHandle::as_raw_handle(&stdout),
+        )));
         Ok(HelperClient {
-            child,
-            stdout_fd,
+            child: Some(child),
             writer: Box::new(stdin),
-            reader: Box::new(BufReader::new(stdout)),
+            reader: Box::new(stdout),
+            ready,
+            #[cfg(windows)]
+            _pipe: None,
             dead: false,
         })
     }
@@ -227,9 +257,11 @@ impl HelperClient {
                 }
                 let pipe = PipeHandle(h);
                 return Ok(HelperClient {
+                    child: None,
                     writer: Box::new(PipeWriter(pipe.clone())),
-                    reader: Box::new(BufReader::new(PipeReader(pipe.clone()))),
-                    _pipe: pipe,
+                    reader: Box::new(PipeReader(pipe.clone())),
+                    ready: peek_probe(pipe.clone()),
+                    _pipe: Some(pipe),
                     dead: false,
                 });
             }
@@ -259,9 +291,8 @@ impl HelperClient {
         if let Ok(line) = serde_json::to_string(&req) {
             let _ = self.roundtrip(&line);
         }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.wait();
         }
     }
 
@@ -307,11 +338,11 @@ impl HelperClient {
             if std::time::Instant::now() >= deadline {
                 return Err("helper did not answer in time".into());
             }
-            if !self.readable(Duration::from_millis(50))? {
+            if !(self.ready)(Duration::from_millis(50))? {
                 continue;
             }
             let mut byte = [0u8; 1];
-            match std::io::Read::read(&mut self.reader, &mut byte) {
+            match self.reader.read(&mut byte) {
                 Ok(0) => return Err("helper closed the connection".into()),
                 Ok(_) => {
                     if byte[0] == b'\n' {
@@ -326,12 +357,12 @@ impl HelperClient {
     }
 }
 
+/// Wait for readability on a file descriptor the child writes to.
 #[cfg(target_os = "linux")]
-impl HelperClient {
-    /// Wait for readability on the child's stdout.
-    fn readable(&mut self, wait: Duration) -> Result<bool, String> {
+fn poll_probe(fd: std::os::fd::RawFd) -> ReadyProbe {
+    Box::new(move |wait: Duration| {
         let mut pollfd = libc::pollfd {
-            fd: self.stdout_fd,
+            fd,
             events: libc::POLLIN,
             revents: 0,
         };
@@ -340,17 +371,21 @@ impl HelperClient {
             return Err("poll on helper stdout failed".into());
         }
         Ok(rc > 0)
-    }
+    })
 }
 
+/// Ask a pipe whether a byte is waiting, rather than blocking on it.
+///
+/// Works for both transports: the named pipe the elevated helper serves, and
+/// the anonymous pipe behind a child's stdout.
 #[cfg(windows)]
-impl HelperClient {
-    /// Ask the pipe whether a byte is waiting, rather than blocking on it.
-    fn readable(&mut self, wait: Duration) -> Result<bool, String> {
+fn peek_probe(handle: PipeHandle) -> ReadyProbe {
+    Box::new(move |wait: Duration| {
         use windows::Win32::System::Pipes::PeekNamedPipe;
         let mut available: u32 = 0;
-        let ok =
-            unsafe { PeekNamedPipe(self._pipe.raw(), None, 0, None, Some(&mut available), None) };
+        // `handle.raw()` and not `handle.0`: a field access would capture the
+        // bare HANDLE, which is not Send, instead of the wrapper that is.
+        let ok = unsafe { PeekNamedPipe(handle.raw(), None, 0, None, Some(&mut available), None) };
         if ok.is_err() {
             return Err("helper pipe closed".into());
         }
@@ -359,14 +394,7 @@ impl HelperClient {
         }
         std::thread::sleep(wait);
         Ok(false)
-    }
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
-impl HelperClient {
-    fn readable(&mut self, _wait: Duration) -> Result<bool, String> {
-        Ok(true)
-    }
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -424,5 +452,66 @@ impl Write for PipeWriter {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `target/<profile>/laninv-helper[.exe]`, when the workspace has been
+    /// built. The test binary lives one level deeper, in `deps/`.
+    fn helper_binary() -> Option<std::path::PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let candidate = exe
+            .parent()?
+            .parent()?
+            .join(crate::privilege::helper_file_name());
+        candidate.exists().then_some(candidate)
+    }
+
+    /// Every request gets its own reply, whole.
+    ///
+    /// Regression test for a client that asked the operating system whether
+    /// the pipe held bytes but read through a `BufReader`: the first read
+    /// moved the entire reply into the reader's private buffer, the probe
+    /// then saw an empty pipe forever, and the request timed out having
+    /// assembled a single byte. Nothing resynchronised afterwards, so the
+    /// following request was answered with the tail of the previous reply.
+    ///
+    /// Driven against the real helper binary over `--stdio`, which needs no
+    /// privileges: elevation is the launcher's business, not the protocol's.
+    #[test]
+    fn each_request_gets_its_own_whole_reply() {
+        let Some(bin) = helper_binary() else {
+            eprintln!(
+                "SKIPPED each_request_gets_its_own_whole_reply: no laninv-helper \
+                 beside the test binary (build the workspace first)"
+            );
+            return;
+        };
+        let mut command = std::process::Command::new(bin);
+        command.arg("--stdio");
+        let mut client = HelperClient::from_command(command).expect("spawn helper --stdio");
+
+        // Rejected by the helper without touching the network, so this tests
+        // the round trip and nothing else.
+        let first = client.arp("not-an-ip");
+        assert_eq!(
+            first,
+            Err("invalid or missing ip".to_string()),
+            "first round trip did not come back"
+        );
+
+        // And the stream is still in step: this reply is its own, not the
+        // tail of the one before.
+        let second = client.arp("still-not-an-ip");
+        assert_eq!(
+            second,
+            Err("invalid or missing ip".to_string()),
+            "replies drifted out of step after the first"
+        );
+
+        client.shutdown();
     }
 }
