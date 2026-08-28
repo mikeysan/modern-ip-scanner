@@ -14,6 +14,7 @@ const ALL_STRATEGIES = [
 export default function SettingsPanel() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [grace, setGrace] = useState(2);
+  const [retention, setRetention] = useState(90);
   const [enabled, setEnabled] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
   const [state, setState] = useState<AppStateInfo | null>(null);
@@ -23,6 +24,7 @@ export default function SettingsPanel() {
     api.getSettings().then((s) => {
       setSettings(s);
       setGrace(s.grace_scans);
+      setRetention(Number(s.retention_days) || 90);
       try {
         setEnabled(JSON.parse(s.enabled_strategies || "[]"));
       } catch {
@@ -34,6 +36,7 @@ export default function SettingsPanel() {
   const save = async () => {
     await api.setSetting("grace_scans", String(grace));
     await api.setSetting("enabled_strategies", JSON.stringify(enabled));
+    await api.setSetting("observations_retention_days", String(retention));
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
@@ -81,6 +84,21 @@ export default function SettingsPanel() {
             onChange={(e) => setGrace(Number(e.target.value) || 2)}
           />
           consecutive complete scans.
+        </label>
+      </section>
+      <section>
+        <h3>History retention</h3>
+        <label className="grace">
+          Keep raw observations for
+          <input
+            type="number"
+            min={1}
+            max={3650}
+            value={retention}
+            onChange={(e) => setRetention(Number(e.target.value) || 90)}
+          />
+          days. Device history and transitions are kept regardless; this only
+          prunes the per-strategy sightings behind them.
         </label>
       </section>
       <section>

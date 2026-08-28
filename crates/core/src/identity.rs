@@ -111,14 +111,18 @@ pub fn network_key(gateway_mac: Option<&str>, subnet: &str, kind: IfKind) -> Str
 /// device was first observed. When no name is known the key degrades to a
 /// MAC-based identity — the aliasing layer upgrades it once a name appears.
 pub fn device_key(primary_name: Option<&str>, mac: Option<&str>, origin_network: &str) -> String {
+    let norm_mac = mac.and_then(normalize_mac);
     let name_part = primary_name
         .map(|n| n.trim().to_lowercase())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| {
-            mac.map(|m| format!("mac:{m}"))
+            // The *normalized* MAC: hashing the raw spelling made
+            // `AA-BB-...` and `aa:bb:...` two different devices.
+            norm_mac
+                .as_deref()
+                .map(|m| format!("mac:{m}"))
                 .unwrap_or_else(|| "anonymous".to_string())
         });
-    let norm_mac = mac.and_then(normalize_mac);
     let oui_part = norm_mac
         .as_deref()
         .and_then(oui)
@@ -248,6 +252,19 @@ mod tests {
         assert_ne!(k1, k2);
         let k3 = device_key(Some("DESKPRINTER "), Some("11:22:33:44:55:66"), &net);
         assert_eq!(k1, k3, "name and MAC are normalized before hashing");
+    }
+
+    #[test]
+    fn the_mac_fallback_key_does_not_depend_on_spelling() {
+        let net = "somenet";
+        let canonical = device_key(None, Some("aa:bb:cc:dd:ee:ff"), net);
+        for spelling in ["AA-BB-CC-DD-EE-FF", "aabbcc.ddeeff", "AA:BB:CC:DD:EE:FF"] {
+            assert_eq!(
+                device_key(None, Some(spelling), net),
+                canonical,
+                "{spelling} is the same device"
+            );
+        }
     }
 
     #[test]

@@ -77,7 +77,10 @@ impl Strategy for Mdns {
             if now >= deadline {
                 break;
             }
-            let mut buf = [0u8; 1500];
+            // mDNS responses are allowed to exceed the ethernet MTU; a 1500
+            // byte buffer silently truncated the larger ones into parse
+            // failures.
+            let mut buf = [0u8; 9000];
             match sock.recv_from(&mut buf) {
                 Ok((n, from)) => {
                     match from.ip() {

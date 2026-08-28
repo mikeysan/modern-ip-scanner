@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 
 use laninv_core::model::{DeviceView, HistoryEvent, Interface, NetworkView};
 use laninv_core::store::Store;
-use laninv_core::util::fmt_time;
 
 struct AppState {
     store: Arc<Mutex<Store>>,
@@ -180,12 +179,7 @@ fn get_settings(state: SharedState) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn set_setting(state: SharedState, key: String, value: String) -> Result<(), String> {
-    const ALLOWED: [&str; 3] = [
-        "grace_scans",
-        "enabled_strategies",
-        "observations_retention_days",
-    ];
-    if !ALLOWED.contains(&key.as_str()) {
+    if !Store::WRITABLE_SETTINGS.contains(&key.as_str()) {
         return Err("setting not writable from the UI".into());
     }
     let store = store_of(&state);
@@ -196,21 +190,7 @@ fn set_setting(state: SharedState, key: String, value: String) -> Result<(), Str
 fn export_csv(state: SharedState, network: Option<String>) -> Result<String, String> {
     let store = store_of(&state);
     let devices = store.list_devices(network.as_deref()).map_err(store_err)?;
-    let mut out = String::from("key,name,ip,mac,vendor,first_seen,last_seen,networks\n");
-    for d in &devices {
-        out.push_str(&format!(
-            "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
-            d.key,
-            d.display_name.replace('"', "'"),
-            d.last_ip.as_deref().unwrap_or(""),
-            d.mac.as_deref().unwrap_or(""),
-            d.vendor.as_deref().unwrap_or("").replace('"', "'"),
-            fmt_time(d.first_seen),
-            fmt_time(d.last_seen),
-            d.networks.join(" ")
-        ));
-    }
-    Ok(out)
+    Ok(laninv_core::export::devices_csv(&devices))
 }
 
 /// Kick off a scan in the background; progress arrives as events.

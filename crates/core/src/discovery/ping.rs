@@ -62,7 +62,10 @@ fn win_icmp(addr: IpAddr, timeout: Duration) -> bool {
             reply_buf.len() as u32,
             timeout_ms,
         );
-        let reply = std::ptr::read(reply_buf.as_ptr() as *const ICMP_ECHO_REPLY);
+        // read_unaligned, not read: `reply_buf` is a [u8] with alignment 1
+        // and ICMP_ECHO_REPLY wants more, so a plain read is undefined
+        // behaviour even when it happens to work.
+        let reply = std::ptr::read_unaligned(reply_buf.as_ptr() as *const ICMP_ECHO_REPLY);
         let _ = IcmpCloseHandle(handle);
         n > 0 && reply.Status == 0
     }

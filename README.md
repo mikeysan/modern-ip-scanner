@@ -59,7 +59,10 @@ laninv scan [--helper] [--strategy ID ...]   scan + record diff
 laninv devices [--network KEY] [--json]      inventory (rows = devices)
 laninv diff [--network KEY]                  what the last scan changed
 laninv name <id|key> "My Printer"            assign a persistent name
+laninv name <id|key> --clear                 remove an assigned name
 laninv networks                              remembered networks
+laninv label <key> "Home"                    label a remembered network
+laninv config [KEY [VALUE]]                  read or change a setting
 laninv history <id|key>                      per-device timeline
 laninv export [--format csv|json] [--network KEY]
 ```

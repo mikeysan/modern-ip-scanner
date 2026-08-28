@@ -50,13 +50,30 @@ enum Command {
     Name {
         /// Device id or key (see `laninv devices`).
         device: String,
-        /// The name to assign; omit to clear.
+        /// The name to assign.
         name: Option<String>,
         #[arg(short = 'n', long)]
         notes: Option<String>,
+        /// Remove the assigned name instead of setting one.
+        #[arg(long, conflicts_with = "name")]
+        clear: bool,
     },
     /// List remembered networks.
     Networks,
+    /// Give a remembered network a label ("Home", "Office 3F").
+    Label {
+        /// Network key or its displayed prefix (see `laninv networks`).
+        network: String,
+        /// The label to assign.
+        label: String,
+    },
+    /// Read or change a setting.
+    Config {
+        /// Setting name; omit to list every setting.
+        key: Option<String>,
+        /// New value; omit to read the current one.
+        value: Option<String>,
+    },
     /// Show a device's observation/transition history.
     History {
         /// Device id or key.
@@ -150,21 +167,58 @@ fn main() -> Result<()> {
             device,
             name,
             notes,
+            clear,
         } => {
             let dev = store
                 .get_device_by_ref(device)?
                 .with_context(|| format!("no device matches '{device}'"))?;
-            match name {
-                Some(n) if !n.trim().is_empty() => {
-                    store.set_user_name(&dev.key, n.trim(), notes.as_deref())?;
-                    eprintln!("named device {} → \"{}\"", short_key(&dev.key), n.trim());
+            match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => {
+                    store.set_user_name(&dev.key, n, notes.as_deref())?;
+                    eprintln!("named device {} → \"{n}\"", short_key(&dev.key));
                 }
-                _ => {
+                // Silently clearing on a missing argument made a typo
+                // indistinguishable from an instruction.
+                None if *clear => {
                     store.clear_user_name(&dev.key)?;
                     eprintln!("cleared name for device {}", short_key(&dev.key));
                 }
+                None => anyhow::bail!(
+                    "no name given; pass a name, or --clear to remove the existing one"
+                ),
             }
         }
+        Command::Label { network, label } => {
+            let net = store
+                .get_network_by_ref(network)?
+                .with_context(|| format!("no network matches '{network}'"))?;
+            store.set_network_label(&net.key, label.trim())?;
+            eprintln!(
+                "labelled network {} → \"{}\"",
+                short_key(&net.key),
+                label.trim()
+            );
+        }
+        Command::Config { key, value } => match (key, value) {
+            (Some(k), Some(v)) => {
+                anyhow::ensure!(
+                    Store::WRITABLE_SETTINGS.contains(&k.as_str()),
+                    "'{k}' is not a writable setting (try: {})",
+                    Store::WRITABLE_SETTINGS.join(", ")
+                );
+                store.set_setting(k, v)?;
+                eprintln!("{k} = {v}");
+            }
+            (Some(k), None) => match store.get_setting(k) {
+                Some(v) => println!("{v}"),
+                None => anyhow::bail!("'{k}' is not set"),
+            },
+            (None, _) => {
+                for k in Store::WRITABLE_SETTINGS {
+                    println!("{k} = {}", store.get_setting(k).unwrap_or_default());
+                }
+            }
+        },
         Command::Networks => {
             let networks = store.list_networks()?;
             if cli.json {
@@ -194,20 +248,7 @@ fn main() -> Result<()> {
         Command::Export { network, format } => match format.as_str() {
             "csv" => {
                 let devices = store.list_devices(network.as_deref())?;
-                println!("key,name,ip,mac,vendor,first_seen,last_seen,networks");
-                for d in &devices {
-                    println!(
-                        "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
-                        d.key,
-                        d.display_name.replace('"', "'"),
-                        d.last_ip.as_deref().unwrap_or(""),
-                        d.mac.as_deref().unwrap_or(""),
-                        d.vendor.as_deref().unwrap_or("").replace('"', "'"),
-                        fmt_time(d.first_seen),
-                        fmt_time(d.last_seen),
-                        d.networks.join(" ")
-                    );
-                }
+                print!("{}", laninv_core::export::devices_csv(&devices));
             }
             "json" => {
                 let devices = store.list_devices(network.as_deref())?;

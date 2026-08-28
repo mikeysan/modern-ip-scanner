@@ -228,7 +228,10 @@ impl Store {
         self.conn.execute(
             "INSERT INTO networks (key, subnet, gateway_mac, first_seen, last_seen)
              VALUES (?1, ?2, ?3, ?4, ?4)
-             ON CONFLICT(key) DO UPDATE SET last_seen = excluded.last_seen",
+             ON CONFLICT(key) DO UPDATE SET
+                last_seen = excluded.last_seen,
+                subnet = coalesce(excluded.subnet, networks.subnet),
+                gateway_mac = coalesce(excluded.gateway_mac, networks.gateway_mac)",
             params![key, subnet, gateway_mac, t],
         )?;
         Ok(())
@@ -250,6 +253,35 @@ impl Store {
             .optional()
             .ok()
             .flatten()
+    }
+
+    /// Settings a frontend may change. Anything else is internal to the store.
+    /// Shared so the CLI and the GUI cannot allow different things.
+    pub const WRITABLE_SETTINGS: [&'static str; 3] = [
+        "grace_scans",
+        "enabled_strategies",
+        "observations_retention_days",
+    ];
+
+    /// Resolve a network by full key or by the short prefix the UIs display.
+    /// An ambiguous prefix resolves to nothing rather than to a guess.
+    pub fn get_network_by_ref(&self, r: &str) -> Result<Option<NetworkView>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.key, n.label, n.subnet, n.gateway_mac, n.first_seen, n.last_seen,
+                    (SELECT COUNT(*) FROM presence p WHERE p.network_key = n.key)
+             FROM networks n WHERE n.key = ?1 OR n.key LIKE ?1 || '%'
+             ORDER BY (n.key = ?1) DESC LIMIT 2",
+        )?;
+        let rows: Vec<NetworkView> = stmt
+            .query_map([r], row_network)?
+            .filter_map(|x| x.ok())
+            .collect();
+        Ok(match rows.first() {
+            // An exact hit wins outright; otherwise a single prefix match.
+            Some(first) if first.key == r => Some(first.clone()),
+            Some(first) if rows.len() == 1 => Some(first.clone()),
+            _ => None,
+        })
     }
 
     pub fn list_networks(&self) -> Result<Vec<NetworkView>> {
@@ -1029,9 +1061,6 @@ mod tests {
         (dir, store)
     }
 
-    #[allow(dead_code)]
-    fn unused() {}
-
     #[test]
     fn migrations_apply_and_version_set() {
         let (_d, store) = tmp_store();
@@ -1198,6 +1227,34 @@ mod tests {
 
         let devices = store.list_devices(Some("net1")).unwrap();
         assert_eq!(devices[0].status, DeviceStatus::Gone);
+    }
+
+    #[test]
+    fn a_network_resolves_by_full_key_or_by_the_prefix_the_ui_shows() {
+        let (_d, store) = tmp_store();
+        store
+            .upsert_network("db64897c26616444", Some("192.168.1.0/24"), None)
+            .unwrap();
+        assert!(store
+            .get_network_by_ref("db64897c26616444")
+            .unwrap()
+            .is_some());
+        // `laninv networks` prints eight characters, so that is what people type.
+        assert!(store.get_network_by_ref("db64897c").unwrap().is_some());
+        assert!(store.get_network_by_ref("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_resolves_to_nothing_rather_than_a_guess() {
+        let (_d, store) = tmp_store();
+        store
+            .upsert_network("aaaa1111", Some("10.0.0.0/24"), None)
+            .unwrap();
+        store
+            .upsert_network("aaaa2222", Some("10.0.1.0/24"), None)
+            .unwrap();
+        assert!(store.get_network_by_ref("aaaa").unwrap().is_none());
+        assert!(store.get_network_by_ref("aaaa1111").unwrap().is_some());
     }
 
     #[test]

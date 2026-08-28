@@ -333,20 +333,16 @@ pub fn run_scan(
 
     // 2. Make sure the gateway is in the neighbor cache so we get its MAC,
     //    then compute the network key.
+    // One CIDR string, used both as key material and as what the user sees.
+    // The two used to differ: the key hashed "192.168.1.0/24" while the
+    // networks table stored a bare "192.168.1.0".
     let subnet = iface
         .ipv4
         .first()
-        .and_then(|c| c.network_string())
+        .and_then(|c| c.network_string().map(|net| format!("{net}/{}", c.prefix)))
         .unwrap_or_else(|| "0.0.0.0/0".into());
     let iface = ensure_gateway_mac(iface, &priv_state);
-    let net_key = identity::network_key(
-        iface.gateway_mac.as_deref(),
-        &format!(
-            "{subnet}/{}",
-            iface.ipv4.first().map(|c| c.prefix).unwrap_or(0)
-        ),
-        iface.kind,
-    );
+    let net_key = identity::network_key(iface.gateway_mac.as_deref(), &subnet, iface.kind);
     store.upsert_network(&net_key, Some(&subnet), iface.gateway_mac.as_deref())?;
     progress(&format!("network: {subnet} (key {net_key})"));
 

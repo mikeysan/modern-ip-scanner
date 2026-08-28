@@ -4,6 +4,7 @@
 
 pub mod diff;
 pub mod discovery;
+pub mod export;
 pub mod identity;
 pub mod merge;
 pub mod model;
