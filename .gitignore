@@ -8,3 +8,9 @@ node_modules/
 
 # Tauri-generated schemas
 /crates/gui/gen/
+
+# Internal working documents. README.md is the only markdown that ships;
+# these are deliberately untracked so they cannot reach the public repo.
+/PLAN.md
+/REVIEW.md
+/docs/design.md

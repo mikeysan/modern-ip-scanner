@@ -10,7 +10,7 @@ fingerprint (name signals + OUI + first-seen network) instead of MAC alone,
 because MAC randomisation broke MAC-as-identity. Devices get **persistent
 user-assigned names** — the feature everything else hangs off.
 
-## Non-negotiables (see `docs/design.md`)
+## Non-negotiables
 
 - **Unprivileged by default.** Neighbor-cache reads, mDNS/SSDP/NetBIOS probes
   and targeted pings need no elevation. Windows uses the IP Helper API only —
@@ -139,7 +139,6 @@ rewrite.
   raw-socket ARP resolves real addresses as root. What remains unproven is
   the `pkexec` launch path, since polkit is absent from that image, and any
   network larger than WSL's own NAT'd subnet.
-- `docs/design.md` holds the invariants — check changes against it.
 
 ## Working on this
 
