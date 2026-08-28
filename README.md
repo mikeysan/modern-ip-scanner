@@ -56,14 +56,24 @@ npm --prefix ui run dev          # leave running, then in another shell:
 cargo run -p laninv-gui
 ```
 
-or build for release, which uses the bundled `ui/dist` and needs no server:
+`cargo tauri dev` does that for you if you have the Tauri CLI.
+
+### Building a runnable app
+
+`--release` on its own is **not** enough. Tauri decides dev-versus-production
+from the `custom-protocol` feature, not from the cargo profile — its build
+script does `let dev = !custom_protocol` — so a release build without it still
+tries to load `devUrl` and opens on *"localhost refused to connect"*.
 
 ```bash
-npm --prefix ui run build        # produce ui/dist
-cargo run --release -p laninv-gui
+npm --prefix ui run build                                  # produce ui/dist
+cargo build --release -p laninv-gui -p laninv -p laninv-helper \
+  --features laninv-gui/custom-protocol
 ```
 
-`cargo tauri dev` does the first of those for you if you have the Tauri CLI.
+That leaves `laninv-gui.exe`, `laninv.exe` and `laninv-helper.exe` together in
+`target/release/`. Keep the helper beside the GUI: it is looked for next to
+the executable, and it is what makes the elevated full-ARP sweep available.
 
 ## CLI cheat sheet
 
@@ -124,11 +134,11 @@ rewrite.
   installer and nothing ships the optional helper. Build it with
   `cargo build -p laninv-helper` and put it beside the app, or point
   `LANINV_HELPER` at it — the Settings panel lists every path that is checked.
-- The Linux code paths (getifaddrs, `/proc/net/arp`, dgram ICMP, raw-ARP
-  helper) **compile and are covered by CI**, and the helper's ARP wire format
-  and routing logic are unit-tested on every platform. They have still never
-  been *run* against a real Linux network — treat the helper's raw-socket path
-  as unproven until someone does.
+- The Linux code paths have now been built, tested and **run** natively
+  (Ubuntu 24.04 on WSL2): the full suite passes there, and the helper's
+  raw-socket ARP resolves real addresses as root. What remains unproven is
+  the `pkexec` launch path, since polkit is absent from that image, and any
+  network larger than WSL's own NAT'd subnet.
 - `docs/design.md` holds the invariants — check changes against it.
 
 ## Working on this
@@ -147,8 +157,18 @@ rustup target add x86_64-unknown-linux-gnu
 cargo check -p laninv-helper --target x86_64-unknown-linux-gnu
 ```
 
-`laninv-core` cannot be cross-checked this way — bundled SQLite needs a C
-cross-compiler — so CI is the gate for it.
+`laninv-core` cannot be cross-*compiled* this way: bundled SQLite needs a C
+cross-compiler. Build it inside Linux instead, which takes about twenty
+seconds and needs no CI:
+
+```bash
+wsl -d Ubuntu-24.04 -e bash -c \
+  'cd /mnt/c/path/to/repo && CARGO_TARGET_DIR=~/t cargo test -p laninv-core -p laninv -p laninv-helper'
+```
+
+Exclude `laninv-gui` there unless the Tauri system libraries are installed,
+and build as your normal user rather than root, or rustup will not find a
+toolchain and root-owned files end up in your cargo directories.
 
 Keep as little as possible behind `#[cfg]`. Wire formats, parsing and address
 arithmetic are platform-independent even when only one platform calls them;

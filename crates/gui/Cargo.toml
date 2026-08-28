@@ -16,3 +16,11 @@ serde_json = "1"
 
 [features]
 default = []
+# Required for any build meant to run on its own.
+#
+# Tauri decides dev-vs-production from this feature, not from the cargo
+# profile: its build script does `let dev = !custom_protocol`. Without it
+# even `cargo build --release` produces a binary that loads `devUrl` and
+# shows "localhost refused to connect" unless a Vite dev server happens to
+# be running. See README, "Building a runnable app".
+custom-protocol = ["tauri/custom-protocol"]
