@@ -42,15 +42,28 @@ Requires Rust (MSVC toolchain on Windows) and Node.js for the UI.
 ```bash
 cargo build --workspace          # binaries land in target/debug
 npm --prefix ui install          # frontend deps (once)
-npm --prefix ui run build        # produce ui/dist for the GUI
-
-cargo run -p laninv-gui          # GUI
 cargo run -p laninv -- scan      # CLI scan
-cargo test -p laninv-core        # unit tests (incl. integrity invariants)
+cargo test --workspace           # unit tests (incl. integrity invariants)
 ```
 
-For development of the UI with hot reload: `cargo run -p laninv-gui` uses the
-`devUrl`; run `npm --prefix ui run dev` alongside.
+**Running the GUI takes one more step than you would expect.** A debug build
+loads `devUrl` (the Vite dev server), so `cargo run -p laninv-gui` on its own
+opens a window showing *"can't reach this page"*. Either run the dev server
+alongside it:
+
+```bash
+npm --prefix ui run dev          # leave running, then in another shell:
+cargo run -p laninv-gui
+```
+
+or build for release, which uses the bundled `ui/dist` and needs no server:
+
+```bash
+npm --prefix ui run build        # produce ui/dist
+cargo run --release -p laninv-gui
+```
+
+`cargo tauri dev` does the first of those for you if you have the Tauri CLI.
 
 ## CLI cheat sheet
 

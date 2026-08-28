@@ -23,7 +23,9 @@ function ipOrder(ip: string | null): number {
   if (!ip) return -1;
   const parts = ip.split(".").map(Number);
   if (parts.length !== 4 || parts.some(Number.isNaN)) return -1;
-  return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+  return (
+    ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3]
+  );
 }
 
 export default function DevicesTable({ devices, selected, onSelect }: Props) {
@@ -37,8 +39,14 @@ export default function DevicesTable({ devices, selected, onSelect }: Props) {
     const q = query.trim().toLowerCase();
     const matches = (d: DeviceView) =>
       !q ||
-      [d.display_name, d.primary_name, d.last_ip, d.mac, d.vendor, d.notes]
-        .some((f) => f?.toLowerCase().includes(q));
+      [
+        d.display_name,
+        d.primary_name,
+        d.last_ip,
+        d.mac,
+        d.vendor,
+        d.notes,
+      ].some((f) => f?.toLowerCase().includes(q));
 
     const value = (d: DeviceView) => {
       switch (sort.key) {
@@ -82,7 +90,9 @@ export default function DevicesTable({ devices, selected, onSelect }: Props) {
       title={`Sort by ${label.toLowerCase()}`}
     >
       {label}
-      {sort.key === key && <span className="sort-arrow">{sort.asc ? "▲" : "▼"}</span>}
+      {sort.key === key && (
+        <span className="sort-arrow">{sort.asc ? "▲" : "▼"}</span>
+      )}
     </th>
   );
 
@@ -102,58 +112,60 @@ export default function DevicesTable({ devices, selected, onSelect }: Props) {
             : `${shown.length} of ${devices.length} devices`}
         </span>
       </div>
-      <table className="devices">
-        <thead>
-          <tr>
-            <th>Status</th>
-            {header("name", "Name")}
-            {header("ip", "IP")}
-            {header("mac", "MAC")}
-            {header("vendor", "Vendor")}
-            <th>Hostname</th>
-            {header("first_seen", "First seen")}
-            {header("last_seen", "Last seen")}
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((d) => (
-            <tr
-              key={d.key}
-              className={d.key === selected ? "selected" : ""}
-              onClick={() => onSelect(d.key)}
-            >
-              <td>
-                <span
-                  className={`chip status-${d.status}`}
-                  title={STATUS_TITLE[d.status]}
-                >
-                  {d.status}
-                </span>
-                {!d.identity_stable && (
-                  <span
-                    className="chip randomised"
-                    title="This device changes its MAC by design. It cannot be followed across rotations, so it is never reported gone."
-                  >
-                    randomised
-                  </span>
-                )}
-              </td>
-              <td className="name">
-                {d.display_name}
-                {d.user_name && d.primary_name && (
-                  <span className="muted"> · {d.primary_name}</span>
-                )}
-              </td>
-              <td className="mono">{d.last_ip ?? "—"}</td>
-              <td className="mono">{d.mac ?? "—"}</td>
-              <td className="muted">{d.vendor ?? "—"}</td>
-              <td className="muted">{d.primary_name ?? "—"}</td>
-              <td className="muted">{fmtTime(d.first_seen)}</td>
-              <td className="muted">{fmtTime(d.last_seen)}</td>
+      <div className="table-scroll">
+        <table className="devices">
+          <thead>
+            <tr>
+              <th>Status</th>
+              {header("name", "Name")}
+              {header("ip", "IP")}
+              {header("mac", "MAC")}
+              {header("vendor", "Vendor")}
+              <th>Hostname</th>
+              {header("first_seen", "First seen")}
+              {header("last_seen", "Last seen")}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {shown.map((d) => (
+              <tr
+                key={d.key}
+                className={d.key === selected ? "selected" : ""}
+                onClick={() => onSelect(d.key)}
+              >
+                <td>
+                  <span
+                    className={`chip status-${d.status}`}
+                    title={STATUS_TITLE[d.status]}
+                  >
+                    {d.status}
+                  </span>
+                  {!d.identity_stable && (
+                    <span
+                      className="chip randomised"
+                      title="This device changes its MAC by design. It cannot be followed across rotations, so it is never reported gone."
+                    >
+                      randomised
+                    </span>
+                  )}
+                </td>
+                <td className="name">
+                  {d.display_name}
+                  {d.user_name && d.primary_name && (
+                    <span className="muted"> · {d.primary_name}</span>
+                  )}
+                </td>
+                <td className="mono">{d.last_ip ?? "—"}</td>
+                <td className="mono">{d.mac ?? "—"}</td>
+                <td className="muted">{d.vendor ?? "—"}</td>
+                <td className="muted">{d.primary_name ?? "—"}</td>
+                <td className="muted">{fmtTime(d.first_seen)}</td>
+                <td className="muted">{fmtTime(d.last_seen)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {shown.length === 0 && (
         <div className="empty">
           <p>No device matches “{query}”.</p>

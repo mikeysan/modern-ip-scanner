@@ -87,7 +87,7 @@ export default function DeviceDetail({ device, deviceKey, onRenamed, onClose }: 
             {e.type === "observation" &&
               `seen ${e.ip}${e.mac ? ` (${e.mac})` : ""}${e.hostname ? ` as ${e.hostname}` : ""} via ${e.source}`}
             {e.type === "transition" &&
-              `${e.kind}${e.changes.length ? ": " + e.changes.map((c) => `${c.field} ${c.from ?? "?"}→${c.to ?? "?"}`).join(", ") : ""}`}
+              `${e.kind}${(e.changes ?? []).length ? ": " + (e.changes ?? []).map((c) => `${c.field} ${c.from ?? "?"}→${c.to ?? "?"}`).join(", ") : ""}`}
             {e.type === "named" && `named “${e.name}”`}
           </li>
         ))}

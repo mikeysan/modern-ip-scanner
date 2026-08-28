@@ -199,7 +199,10 @@ pub struct Transition {
     pub device_key: String,
     /// Display name at the time of the transition (user name preferred).
     pub device_display: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Always serialized, even when empty: the frontends declare it as a
+    /// plain array, and omitting it made `changes.length` throw on every
+    /// `new`, `gone` and `returned` transition.
+    #[serde(default)]
     pub changes: Vec<FieldChange>,
     /// True when this device cannot be re-identified across scans, so the
     /// transition should be read as "an address appeared", not "a device

@@ -169,9 +169,24 @@ table.devices tr.selected { background: var(--bg-hover); outline: 1px solid var(
 }
 
 .devices-pane {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+}
+
+/* The table used to be the flex child of .main and took `.devices { flex: 1 }`
+   from that rule. Inside the pane it must size to its content instead, or the
+   rows stretch to fill the height. */
+.table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.devices-pane table.devices {
+  flex: 0 0 auto;
 }
 
 .table-toolbar {
@@ -270,4 +285,23 @@ th.sortable.active {
 
 .paths code {
   font-size: 0.78rem;
+}
+
+.crash {
+  padding: 2rem;
+  max-width: 60rem;
+}
+
+.crash h2 {
+  margin: 0 0 0.5rem;
+}
+
+.crash pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #191919;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.8rem;
 }

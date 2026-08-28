@@ -68,8 +68,10 @@ export default function SettingsPanel() {
           ))}
         </ul>
         <p className="muted small">
-          A scan is marked <em>partial</em> unless every enabled strategy could
-          run. Partial scans never report devices as gone.
+          A scan is marked <em>partial</em> unless every enabled strategy ran
+          cleanly <em>and</em> the scan covered the network — that needs a
+          full-coverage strategy (Full ARP) and a reply from the gateway.
+          Partial scans still report new and changed devices, but never gone.
         </p>
       </section>
       <section>

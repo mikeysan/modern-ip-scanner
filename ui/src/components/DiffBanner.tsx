@@ -49,13 +49,6 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
           ))}
         </ul>
       )}
-      {diff.transitions.some((t) => t.unstable_identity) && (
-        <p className="muted small randomised-note">
-          Devices marked <em>randomised identity</em> change their MAC by design.
-          laninv cannot follow them across rotations, so it never reports them
-          gone. Give one a name to make it trackable.
-        </p>
-      )}
       {diff.transitions.length > 0 && (
         <ul className="transitions">
           {diff.transitions.map((t, i) => (
@@ -66,15 +59,22 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
                   randomised identity
                 </span>
               )}
-              {t.changes.length > 0 && (
+              {(t.changes ?? []).length > 0 && (
                 <span className="muted">
                   {" "}
-                  ({t.changes.map((c) => `${c.field}: ${c.from ?? "∅"}→${c.to ?? "∅"}`).join(", ")})
+                  ({(t.changes ?? []).map((c) => `${c.field}: ${c.from ?? "∅"}→${c.to ?? "∅"}`).join(", ")})
                 </span>
               )}
             </li>
           ))}
         </ul>
+      )}
+      {diff.transitions.some((t) => t.unstable_identity) && (
+        <p className="muted small randomised-note">
+          Devices marked <em>randomised identity</em> change their MAC by design.
+          laninv cannot follow them across rotations, so it never reports them
+          gone. Give one a name to make it trackable.
+        </p>
       )}
     </div>
   );
