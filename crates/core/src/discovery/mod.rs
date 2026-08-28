@@ -16,8 +16,14 @@ pub mod ssdp;
 
 use crate::model::{Capability, Interface, Observation};
 
-/// Callback that resolves an IPv4 address to a normalized MAC.
-pub type ArpResolver = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Callback that resolves many IPv4 addresses to normalized MACs, returning
+/// one slot per address in the order given.
+///
+/// Batch-shaped on purpose. The privileged helper is a single connection, so
+/// asking it for one address at a time costs one ARP wait each, in series --
+/// which made an exhaustive sweep through it take minutes. Backends without
+/// that constraint fan out internally, so the caller never manages threads.
+pub type ArpResolver = Box<dyn Fn(&[String]) -> Vec<Option<String>> + Send + Sync>;
 
 /// Input to a strategy run.
 pub struct ScanContext {
@@ -26,13 +32,9 @@ pub struct ScanContext {
     pub candidates: Vec<String>,
     /// Confirmed capabilities for this scan.
     pub caps: Vec<Capability>,
-    /// When set, resolves an IPv4 address to a MAC using the privileged
-    /// helper or a native privileged API. Returns None when unavailable.
-    pub arp_resolve: Option<ArpResolver>,
-    /// How many ARP resolutions can genuinely proceed at once. The helper
-    /// protocol is one request at a time behind a mutex, so fanning out to
-    /// dozens of threads there buys nothing and only adds contention.
-    pub arp_concurrency: usize,
+    /// When set, resolves addresses to MACs using the privileged helper or a
+    /// native privileged API. Slots are None where nothing answered.
+    pub arp_resolve_many: Option<ArpResolver>,
 }
 
 impl ScanContext {

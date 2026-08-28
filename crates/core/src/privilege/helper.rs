@@ -1,6 +1,9 @@
 //! Client side of the optional privileged helper (`laninv-helper`).
 //!
 //! Protocol: newline-delimited JSON, one request and one response per line.
+//! `arp-batch` resolves many addresses per request, which matters because
+//! there is exactly one connection: anything not batched is paid for in
+//! series.
 //! - Linux: helper is spawned via `pkexec` and speaks over stdio.
 //! - Windows: helper is spawned elevated via `ShellExecuteEx(runas)` and
 //!   serves a named pipe restricted to the launching user's SID. Both ends
@@ -17,6 +20,10 @@ use std::time::Duration;
 /// the Linux launcher gets its pipes from the child process directly).
 #[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+/// Most addresses to put in one `arp-batch`. Must not exceed the helper's own
+/// cap, which rejects anything larger; see `MAX_BATCH` in `laninv-helper`.
+const MAX_BATCH: usize = 128;
+
 /// A quiet address costs the helper one ARP wait: about a second on Linux,
 /// and up to ~3.2s on Windows, where SendARP retries internally. Measured at
 /// 3.17s against a silent address, so this budget is deliberately well clear
@@ -52,6 +59,8 @@ struct Req<'a> {
     op: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     ip: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ips: Option<&'a [String]>,
 }
 
 #[derive(serde::Deserialize)]
@@ -59,6 +68,9 @@ struct Resp {
     ok: bool,
     #[serde(default)]
     mac: Option<String>,
+    /// One slot per address of an `arp-batch`, in the order asked.
+    #[serde(default)]
+    macs: Option<Vec<Option<String>>>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -277,9 +289,51 @@ impl HelperClient {
         let req = Req {
             op: "arp",
             ip: Some(ip),
+            ips: None,
         };
         let line = serde_json::to_string(&req).map_err(|e| e.to_string())?;
         self.roundtrip(&line)
+    }
+
+    /// Resolve many addresses per round trip, one result slot per input.
+    ///
+    /// Chunks internally, so callers may hand over a whole subnet.
+    pub fn arp_batch(&mut self, ips: &[String]) -> Result<Vec<Option<String>>, String> {
+        let mut out = Vec::with_capacity(ips.len());
+        for chunk in ips.chunks(MAX_BATCH) {
+            out.extend(self.arp_batch_chunk(chunk)?);
+        }
+        Ok(out)
+    }
+
+    fn arp_batch_chunk(&mut self, ips: &[String]) -> Result<Vec<Option<String>>, String> {
+        if ips.is_empty() {
+            return Ok(Vec::new());
+        }
+        let req = Req {
+            op: "arp-batch",
+            ip: None,
+            ips: Some(ips),
+        };
+        let line = serde_json::to_string(&req).map_err(|e| e.to_string())?;
+        let resp = self.exchange(&line, batch_timeout(ips.len()))?;
+        if !resp.ok {
+            return Err(resp.error.unwrap_or_else(|| "helper error".into()));
+        }
+        // Positional results are only usable if there is one per address, so
+        // a short reply is an error rather than something to pad out: padding
+        // would attribute one address's MAC to another.
+        let macs = resp
+            .macs
+            .ok_or_else(|| "helper answered a batch without results".to_string())?;
+        if macs.len() != ips.len() {
+            return Err(format!(
+                "helper answered {} of {} addresses",
+                macs.len(),
+                ips.len()
+            ));
+        }
+        Ok(macs)
     }
 
     /// Ask the helper to exit cleanly.
@@ -287,6 +341,7 @@ impl HelperClient {
         let req = Req {
             op: "shutdown",
             ip: None,
+            ips: None,
         };
         if let Ok(line) = serde_json::to_string(&req) {
             let _ = self.roundtrip(&line);
@@ -297,6 +352,18 @@ impl HelperClient {
     }
 
     fn roundtrip(&mut self, line: &str) -> Result<Option<String>, String> {
+        let resp = self.exchange(line, REQUEST_TIMEOUT)?;
+        if !resp.ok {
+            return Err(resp.error.unwrap_or_else(|| "helper error".into()));
+        }
+        Ok(resp.mac)
+    }
+
+    /// One request, one reply, with the caller's own budget.
+    ///
+    /// A batch needs a longer one than a single address: the helper answers
+    /// it with bounded concurrency, so its cost scales with the batch.
+    fn exchange(&mut self, line: &str, budget: Duration) -> Result<Resp, String> {
         if self.dead {
             return Err("helper is no longer usable".into());
         }
@@ -304,7 +371,7 @@ impl HelperClient {
         self.writer
             .flush()
             .map_err(|e| format!("helper flush failed: {e}"))?;
-        let response = match self.read_line_before(std::time::Instant::now() + REQUEST_TIMEOUT) {
+        let response = match self.read_line_before(std::time::Instant::now() + budget) {
             Ok(r) => r,
             Err(e) => {
                 // A helper that stopped answering will not start again, and a
@@ -317,12 +384,7 @@ impl HelperClient {
             self.dead = true;
             return Err("helper closed the connection".into());
         }
-        let resp: Resp =
-            serde_json::from_str(response.trim()).map_err(|e| format!("bad helper reply: {e}"))?;
-        if !resp.ok {
-            return Err(resp.error.unwrap_or_else(|| "helper error".into()));
-        }
-        Ok(resp.mac)
+        serde_json::from_str(response.trim()).map_err(|e| format!("bad helper reply: {e}"))
     }
 }
 
@@ -355,6 +417,16 @@ impl HelperClient {
             }
         }
     }
+}
+
+/// How long to allow a batch of `n` addresses.
+///
+/// The helper resolves a batch with bounded concurrency, so the cost is a
+/// fraction of `n` ARP waits rather than all of them. The allowance is
+/// deliberately loose: a quiet address costs up to ~3.2s on Windows, and a
+/// batch that is merely slow must not be mistaken for a wedged helper.
+fn batch_timeout(n: usize) -> Duration {
+    REQUEST_TIMEOUT + Duration::from_millis(150) * (n.min(MAX_BATCH) as u32)
 }
 
 /// Wait for readability on a file descriptor the child writes to.
@@ -510,6 +582,40 @@ mod tests {
             second,
             Err("invalid or missing ip".to_string()),
             "replies drifted out of step after the first"
+        );
+
+        client.shutdown();
+    }
+
+    /// A batch costs one round trip and answers every address in order.
+    ///
+    /// Regression test for the helper being a serialization point: the
+    /// resolver held one connection behind a mutex, so an exhaustive sweep
+    /// queued 254 round trips through it, one ARP wait at a time.
+    #[test]
+    fn a_batch_answers_every_address_and_leaves_the_stream_in_step() {
+        let Some(bin) = helper_binary() else {
+            eprintln!(
+                "SKIPPED a_batch_answers_every_address_and_leaves_the_stream_in_step:                  no laninv-helper beside the test binary (build the workspace first)"
+            );
+            return;
+        };
+        let mut command = std::process::Command::new(bin);
+        command.arg("--stdio");
+        let mut client = HelperClient::from_command(command).expect("spawn helper --stdio");
+
+        // Rejected by the helper without touching the network, so this tests
+        // the round trip and nothing else.
+        let ips: Vec<String> = vec!["not-an-ip".into(), "nor-this".into(), "or-this".into()];
+        let got = client.arp_batch(&ips).expect("batch round trip");
+        assert_eq!(got, vec![None, None, None]);
+
+        // One reply was consumed, not one per address: a single request after
+        // it must still get its own answer.
+        assert_eq!(
+            client.arp("not-an-ip"),
+            Err("invalid or missing ip".to_string()),
+            "the batch reply left the stream out of step"
         );
 
         client.shutdown();

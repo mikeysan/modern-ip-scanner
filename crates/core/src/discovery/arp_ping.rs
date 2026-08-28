@@ -5,9 +5,6 @@
 //! privileged helper on Linux). When that capability is missing the strategy
 //! reports a problem, which makes the scan partial.
 
-use std::sync::mpsc;
-use std::thread;
-
 use super::{ScanContext, Strategy, StrategyOutcome};
 use crate::model::{Capability, Observation};
 
@@ -40,7 +37,7 @@ impl Strategy for ArpPing {
                 "ARP resolution unavailable (launch with the privileged helper)".to_string(),
             );
         }
-        let Some(resolve) = ctx.arp_resolve.as_ref() else {
+        let Some(resolve_many) = ctx.arp_resolve_many.as_ref() else {
             return StrategyOutcome::failed("no ARP resolver wired up".to_string());
         };
 
@@ -98,40 +95,27 @@ impl Strategy for ArpPing {
             return StrategyOutcome::failed(reason);
         }
 
-        let (tx, rx) = mpsc::channel::<(String, Option<String>)>();
-        let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // One call for the whole sweep: how it is parallelised is the
+        // resolver's business, because only the resolver knows whether it is
+        // talking to a local syscall or down a single pipe to the helper.
         let ips: Vec<String> = targets
             .iter()
             .map(|a| crate::util::format_ipv4(*a))
             .collect();
-        let ips = std::sync::Arc::new(ips);
-        thread::scope(|s| {
-            for _ in 0..ctx.arp_concurrency.max(1).min(ips.len()) {
-                let (tx, ips, next) = (tx.clone(), ips.clone(), next.clone());
-                s.spawn(move || loop {
-                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    if i >= ips.len() {
-                        break;
-                    }
-                    if let Some(mac) = resolve(&ips[i]) {
-                        let _ = tx.send((ips[i].clone(), Some(mac)));
-                    }
-                });
-            }
-        });
-        drop(tx);
-
-        let mut observations = Vec::new();
-        for (ip, mac) in rx {
-            observations.push(Observation {
-                ip,
-                mac,
-                name: None,
-                vendor: None,
-                source: self.id().to_string(),
-                confidence: 0.95,
-            });
-        }
+        let observations: Vec<Observation> = ips
+            .iter()
+            .zip(resolve_many(&ips))
+            .filter_map(|(ip, mac)| {
+                mac.map(|mac| Observation {
+                    ip: ip.clone(),
+                    mac: Some(mac),
+                    name: None,
+                    vendor: None,
+                    source: self.id().to_string(),
+                    confidence: 0.95,
+                })
+            })
+            .collect();
         if oversized {
             return StrategyOutcome {
                 observations,

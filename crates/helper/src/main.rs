@@ -3,6 +3,8 @@
 //! Speaks newline-delimited JSON:
 //!   request  {"op":"arp","ip":"192.168.1.5"}
 //!   response {"ok":true,"mac":"aa:bb:cc:dd:ee:ff"} | {"ok":false,"error":"..."}
+//!   request  {"op":"arp-batch","ips":["192.168.1.5","192.168.1.6"]}
+//!   response {"ok":true,"macs":["aa:bb:cc:dd:ee:ff",null]}  (positional)
 //!   {"op":"shutdown"} closes the helper.
 //!
 //! Modes:
@@ -22,6 +24,8 @@ struct Req {
     op: String,
     #[serde(default)]
     ip: Option<String>,
+    #[serde(default)]
+    ips: Option<Vec<String>>,
 }
 
 #[derive(serde::Serialize)]
@@ -29,6 +33,10 @@ struct Resp<'a> {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     mac: Option<String>,
+    /// One slot per requested address, in order. Only ever set for
+    /// `arp-batch`, and the client requires it there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    macs: Option<Vec<Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
 }
@@ -65,6 +73,18 @@ fn main() {
     }
 }
 
+/// Most addresses a single batch may carry. Bounds both the work the helper
+/// takes on per request and the size of the reply that has to fit through the
+/// pipe. The client chunks to the same figure; if you change it here, change
+/// it there.
+const MAX_BATCH: usize = 128;
+
+/// How many addresses in a batch are resolved at once.
+///
+/// Each worker does its own ARP exchange on its own socket, so this is what
+/// turns a batch from `n` waits into `n / BATCH_CONCURRENCY` of them.
+const BATCH_CONCURRENCY: usize = 32;
+
 fn handle(line: &str) -> String {
     let req: Req = match serde_json::from_str(line.trim()) {
         Ok(r) => r,
@@ -77,6 +97,7 @@ fn handle(line: &str) -> String {
             return serde_json::to_string(&Resp {
                 ok: true,
                 mac: None,
+                macs: None,
                 error: None,
             })
             .unwrap_or_default();
@@ -86,27 +107,92 @@ fn handle(line: &str) -> String {
                 Some(mac) => Resp {
                     ok: true,
                     mac: Some(mac),
+                    macs: None,
                     error: None,
                 },
                 None => Resp {
                     ok: false,
                     mac: None,
+                    macs: None,
                     error: Some("no reply"),
                 },
             },
             None => Resp {
                 ok: false,
                 mac: None,
+                macs: None,
                 error: Some("invalid or missing ip"),
+            },
+        },
+        // One round trip for many addresses. The client holds a single
+        // connection, so anything it cannot ask for at once it pays for in
+        // series -- which is what made an exhaustive sweep through the
+        // helper take one ARP wait per address.
+        "arp-batch" => match req.ips.as_deref() {
+            Some(ips) if ips.len() > MAX_BATCH => Resp {
+                ok: false,
+                mac: None,
+                macs: None,
+                error: Some("batch too large"),
+            },
+            Some(ips) => Resp {
+                ok: true,
+                mac: None,
+                macs: Some(resolve_batch(ips)),
+                error: None,
+            },
+            None => Resp {
+                ok: false,
+                mac: None,
+                macs: None,
+                error: Some("missing ips"),
             },
         },
         _ => Resp {
             ok: false,
             mac: None,
+            macs: None,
             error: Some("unknown op"),
         },
     };
     serde_json::to_string(&resp).unwrap_or_default()
+}
+
+/// Resolve a batch of addresses concurrently, one result slot per input.
+///
+/// The fan-out belongs here rather than in the caller: the caller reaches the
+/// helper through one connection, so its own threads would only queue on the
+/// same request-response channel. Doing it where the privilege already is
+/// turns `n` serial ARP waits into `n / BATCH_CONCURRENCY` of them.
+fn resolve_batch(ips: &[String]) -> Vec<Option<String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut out = vec![None; ips.len()];
+    if ips.is_empty() {
+        return out;
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Option<String>)>();
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..BATCH_CONCURRENCY.min(ips.len()) {
+            let tx = tx.clone();
+            let next = &next;
+            s.spawn(move || loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                if i >= ips.len() {
+                    break;
+                }
+                let _ = tx.send((i, valid_ipv4(&ips[i]).and_then(arp_resolve)));
+            });
+        }
+        drop(tx);
+    });
+    // Positional: every worker reports the index it was given, so the reply
+    // lines up with the request whatever order the answers arrive in.
+    for (i, mac) in rx {
+        out[i] = mac;
+    }
+    out
 }
 
 fn valid_ipv4(s: &str) -> Option<&str> {
@@ -849,5 +935,44 @@ wlan0	0000A8C0	00000000	0001	0	0	600	0000FFFF	0	0	0
             ),
             None
         );
+    }
+
+    /// One result slot per address, in the order asked.
+    ///
+    /// A batch exists so an exhaustive sweep costs one round trip instead of
+    /// 254 serialized ones; positional results are what let the caller line
+    /// them back up with its own list.
+    #[test]
+    fn a_batch_answers_every_address_in_order() {
+        let reply =
+            super::handle(r#"{"op":"arp-batch","ips":["not-an-ip","also-bad","1.2.3.4.5"]}"#);
+        let v: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(v["ok"], serde_json::json!(true), "reply was {reply}");
+        assert_eq!(
+            v["macs"],
+            serde_json::json!([null, null, null]),
+            "reply was {reply}"
+        );
+    }
+
+    /// The reply has to fit through a pipe and the work has to stay bounded,
+    /// so an oversized batch is refused rather than half-served.
+    #[test]
+    fn an_oversized_batch_is_refused() {
+        let ips: Vec<String> = (0..super::MAX_BATCH + 1)
+            .map(|i| format!("10.0.{}.{}", i / 256, i % 256))
+            .collect();
+        let req = serde_json::json!({"op": "arp-batch", "ips": ips}).to_string();
+        let reply = super::handle(&req);
+        let v: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(v["ok"], serde_json::json!(false), "reply was {reply}");
+    }
+
+    /// An `arp-batch` with no `ips` is a malformed request, not an empty one.
+    #[test]
+    fn a_batch_without_addresses_is_an_error() {
+        let reply = super::handle(r#"{"op":"arp-batch"}"#);
+        let v: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(v["ok"], serde_json::json!(false), "reply was {reply}");
     }
 }

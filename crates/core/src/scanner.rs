@@ -284,6 +284,19 @@ fn resolve_and_diff(
     })
 }
 
+/// How many ARP resolutions may proceed at once.
+///
+/// The helper used to force this to 1: one connection behind a mutex meant
+/// every thread queued on the same request-response channel, so an exhaustive
+/// sweep paid one ARP wait per address in series.
+fn arp_concurrency_for(helper_connected: bool) -> usize {
+    // The helper is no longer a bottleneck to design around: it answers a
+    // batch concurrently, so the connection carries one request for a whole
+    // sweep rather than one per address.
+    let _ = helper_connected;
+    64
+}
+
 /// What to do about the privileged helper for this scan.
 #[derive(Debug, PartialEq, Eq)]
 enum HelperPlan {
@@ -458,18 +471,16 @@ pub fn run_scan(
         }
     };
 
-    // Native SendARP is genuinely concurrent; the helper is a single pipe
-    // behind a mutex, so more threads there just queue.
-    let arp_concurrency = if priv_state.helper_connected { 1 } else { 64 };
+    let arp_concurrency = arp_concurrency_for(priv_state.helper_connected);
+    let arp_many = build_arp_batch_resolver(&arp_of, &helper, &priv_state, arp_concurrency);
     let make_ctx = |candidates: Vec<String>| ScanContext {
         iface: iface.clone(),
         candidates,
         caps: priv_state.capabilities.clone(),
-        arp_resolve: Some(Box::new({
-            let arp_of = arp_of.clone();
-            move |ip: &str| arp_of(ip)
+        arp_resolve_many: Some(Box::new({
+            let arp_many = arp_many.clone();
+            move |ips: &[String]| arp_many(ips)
         })),
-        arp_concurrency,
     };
 
     let wave1_ctx = make_ctx(vec![]);
@@ -667,6 +678,11 @@ type SharedHelper =
     std::sync::Arc<std::sync::Mutex<Option<crate::privilege::helper::HelperClient>>>;
 type SharedResolver = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
+/// Whether ARP resolves without the helper at all (Windows `SendARP`).
+fn native_arp_available(priv_state: &PrivilegeState) -> bool {
+    priv_state.has(crate::model::Capability::ArpResolve) && !cfg!(target_os = "linux")
+}
+
 fn build_arp_resolver(
     iface: &Interface,
     priv_state: &PrivilegeState,
@@ -674,8 +690,7 @@ fn build_arp_resolver(
 ) -> SharedResolver {
     // Prefer native ARP (Windows SendARP works unprivileged); fall back to
     // the helper; finally the neighbor cache.
-    let native_ok =
-        priv_state.has(crate::model::Capability::ArpResolve) && !cfg!(target_os = "linux");
+    let native_ok = native_arp_available(priv_state);
     let _ = iface;
     let helper = std::sync::Arc::clone(helper);
     std::sync::Arc::new(move |ip: &str| {
@@ -684,7 +699,7 @@ fn build_arp_resolver(
                 return Some(mac);
             }
         }
-        if let Some(h) = helper.lock().unwrap().as_mut() {
+        if let Some(h) = helper.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
             if let Ok(Some(mac)) = h.arp(ip) {
                 return Some(mac);
             }
@@ -695,6 +710,95 @@ fn build_arp_resolver(
             .find(|e| e.ip == ip)
             .map(|e| e.mac.clone())
     })
+}
+
+type SharedBatchResolver = std::sync::Arc<dyn Fn(&[String]) -> Vec<Option<String>> + Send + Sync>;
+
+/// Resolve a whole list of addresses, choosing how to parallelise it based on
+/// which backend is actually doing the work.
+///
+/// The helper is one connection: its own `arp-batch` turns a sweep into a
+/// handful of round trips, where per-address calls would queue behind each
+/// other for one ARP wait apiece. Native resolution has no such constraint,
+/// so it fans out across local threads instead.
+fn build_arp_batch_resolver(
+    single: &SharedResolver,
+    helper: &SharedHelper,
+    priv_state: &PrivilegeState,
+    concurrency: usize,
+) -> SharedBatchResolver {
+    let native_ok = native_arp_available(priv_state);
+    let single = std::sync::Arc::clone(single);
+    let helper = std::sync::Arc::clone(helper);
+    std::sync::Arc::new(move |ips: &[String]| {
+        if !native_ok {
+            let mut guard = helper.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(h) = guard.as_mut() {
+                // A failed batch falls through to the per-address path rather
+                // than losing the sweep: the helper may be dead, and the
+                // neighbor cache still has something to say.
+                if let Ok(macs) = h.arp_batch(ips) {
+                    return fill_from_neighbor_cache(ips, macs);
+                }
+            }
+        }
+        parallel_resolve(ips, &single, concurrency)
+    })
+}
+
+/// Resolve a list with a local thread pool, for backends where each address
+/// is an independent syscall.
+fn parallel_resolve(
+    ips: &[String],
+    resolve: &SharedResolver,
+    concurrency: usize,
+) -> Vec<Option<String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut out = vec![None; ips.len()];
+    if ips.is_empty() {
+        return out;
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Option<String>)>();
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..concurrency.max(1).min(ips.len()) {
+            let tx = tx.clone();
+            let next = &next;
+            let resolve = std::sync::Arc::clone(resolve);
+            s.spawn(move || loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                if i >= ips.len() {
+                    break;
+                }
+                let _ = tx.send((i, resolve(&ips[i])));
+            });
+        }
+        drop(tx);
+    });
+    // Positional, so the answers line up with the request however they arrive.
+    for (i, mac) in rx {
+        out[i] = mac;
+    }
+    out
+}
+
+/// Fill slots nothing answered for from the neighbor cache, reading the table
+/// once.
+///
+/// The per-address resolver re-read the whole table for every address it
+/// could not resolve, which over a /24 sweep meant hundreds of full reads.
+fn fill_from_neighbor_cache(ips: &[String], mut macs: Vec<Option<String>>) -> Vec<Option<String>> {
+    if macs.iter().all(Option::is_some) {
+        return macs;
+    }
+    let table = crate::netenv::neighbor_entries();
+    for (ip, slot) in ips.iter().zip(macs.iter_mut()) {
+        if slot.is_none() {
+            *slot = table.iter().find(|e| &e.ip == ip).map(|e| e.mac.clone());
+        }
+    }
+    macs
 }
 
 /// Ensure the gateway's MAC is known: probe the neighbor cache, and if it is
@@ -1080,6 +1184,15 @@ mod tests {
         assert_eq!(helper_plan(true, false), HelperPlan::Launch);
         assert_eq!(helper_plan(false, false), HelperPlan::NotRequested);
         assert_eq!(helper_plan(false, true), HelperPlan::NotRequested);
+    }
+
+    /// The helper must not throttle an exhaustive sweep to one address at a
+    /// time. It answers batches concurrently now, so a connected helper is no
+    /// longer a reason to give up parallelism.
+    #[test]
+    fn a_connected_helper_no_longer_serialises_the_sweep() {
+        assert!(arp_concurrency_for(true) > 1);
+        assert_eq!(arp_concurrency_for(true), arp_concurrency_for(false));
     }
 
     #[test]
