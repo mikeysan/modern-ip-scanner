@@ -78,6 +78,8 @@ export interface InterfaceInfo {
 
 export interface AppStateInfo {
   version: string;
+  /** Set when the inventory database could not be opened and writes are not kept. */
+  startup_error: string | null;
   networks: number;
   devices: number;
   capabilities: string[];

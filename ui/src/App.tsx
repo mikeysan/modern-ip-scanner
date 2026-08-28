@@ -47,6 +47,9 @@ export default function App() {
       .getState()
       .then((s) => {
         setHelperAvailable(s.helper_available);
+        if (s.startup_error) {
+          setError(s.startup_error);
+        }
         if (s.interface) {
           setIfaceLabel(`${s.interface.name} (${s.interface.kind})`);
         }

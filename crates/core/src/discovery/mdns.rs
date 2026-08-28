@@ -255,9 +255,11 @@ pub fn parse_dns_message(msg: &[u8]) -> Result<DnsMessage, &'static str> {
     if msg.len() < 12 {
         return Err("too short");
     }
-    let qdcount = u16::from_be_bytes([msg[4], msg[5]]);
-    let ancount = u16::from_be_bytes([msg[6], msg[7]]);
-    let arcount = u16::from_be_bytes([msg[10], msg[11]]);
+    // Widened before any arithmetic: these are attacker-controlled, and
+    // ANCOUNT + ARCOUNT overflows u16 in a way that panics in debug builds.
+    let qdcount = u32::from(u16::from_be_bytes([msg[4], msg[5]]));
+    let ancount = u32::from(u16::from_be_bytes([msg[6], msg[7]]));
+    let arcount = u32::from(u16::from_be_bytes([msg[10], msg[11]]));
     let mut off = 12;
     // Skip questions.
     for _ in 0..qdcount {
@@ -352,6 +354,38 @@ fn read_name(off: usize, msg: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 12-byte DNS header with the given section counts.
+    fn header(qdcount: u16, ancount: u16, arcount: u16) -> Vec<u8> {
+        let mut p = vec![0x00, 0x01, 0x84, 0x00];
+        p.extend_from_slice(&qdcount.to_be_bytes());
+        p.extend_from_slice(&ancount.to_be_bytes());
+        p.extend_from_slice(&0u16.to_be_bytes()); // nscount
+        p.extend_from_slice(&arcount.to_be_bytes());
+        p
+    }
+
+    #[test]
+    fn absurd_section_counts_are_rejected_not_fatal() {
+        // mDNS is unauthenticated multicast: any host on the LAN can send
+        // this. Summing the counts as u16 overflows and panics in debug
+        // builds, which takes the whole scan down with it.
+        let msg = header(0, u16::MAX, 1);
+        assert!(parse_dns_message(&msg).is_err());
+
+        let msg = header(u16::MAX, u16::MAX, u16::MAX);
+        assert!(parse_dns_message(&msg).is_err());
+    }
+
+    #[test]
+    fn a_truncated_message_is_rejected_not_fatal() {
+        for len in 0..12 {
+            assert!(parse_dns_message(&vec![0u8; len]).is_err());
+        }
+        let mut msg = header(0, 1, 0);
+        msg.push(0x03); // a label length with no label after it
+        assert!(parse_dns_message(&msg).is_err());
+    }
 
     #[test]
     fn binds_port_5353_even_when_another_socket_already_holds_it() {

@@ -60,6 +60,22 @@ fn absorb_outcome(
     observations.extend(outcome.observations);
 }
 
+/// Turn a strategy thread's join result into an outcome.
+///
+/// A strategy that panics costs the scan its completeness, exactly like one
+/// that returned an error — it must never take the scan down with it. The
+/// panic message is preserved so the partial reason says what happened.
+fn outcome_from_join(result: std::thread::Result<StrategyOutcome>) -> StrategyOutcome {
+    result.unwrap_or_else(|payload| {
+        let what = payload
+            .downcast_ref::<&'static str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown payload".to_string());
+        StrategyOutcome::failed(format!("strategy panicked: {what}"))
+    })
+}
+
 /// Decide whether this scan may treat "not seen" as "not there".
 ///
 /// Two conditions, both necessary:
@@ -369,13 +385,16 @@ pub fn run_scan(
             return;
         }
         let results: Vec<(&dyn Strategy, StrategyOutcome)> = std::thread::scope(|s| {
+            // The handle is paired with its strategy outside the thread, so a
+            // panicking one can still be named in the partial reason. Each
+            // handle is joined explicitly, so `scope` never re-panics.
             let handles: Vec<_> = wave_strategies
                 .iter()
-                .map(|st| s.spawn(move || (*st, st.run(ctx))))
+                .map(|st| (*st, s.spawn(move || st.run(ctx))))
                 .collect();
             handles
                 .into_iter()
-                .map(|h| h.join().expect("strategy panicked"))
+                .map(|(st, h)| (st, outcome_from_join(h.join())))
                 .collect()
         });
         for (st, outcome) in results {
@@ -936,6 +955,37 @@ mod tests {
         // something", which still rules out a dead link.
         assert!(absence_evidence_gap(&["arp-ping".into()], None, &ips(&[])).is_some());
         assert!(absence_evidence_gap(&["arp-ping".into()], None, &ips(&["10.0.0.9"])).is_none());
+    }
+
+    #[test]
+    fn a_panicking_strategy_becomes_a_partial_reason_not_a_dead_scan() {
+        // Reachable: any host on the LAN can send a malformed mDNS response.
+        // A panic here used to propagate out of run_scan and, in the GUI,
+        // leave the app permanently stuck "Scanning...".
+        let panicked: std::thread::Result<StrategyOutcome> =
+            Err(Box::new("attempt to add with overflow"));
+        let outcome = outcome_from_join(panicked);
+        let reason = outcome.problem.expect("a panic must make the scan partial");
+        assert!(
+            reason.contains("attempt to add with overflow"),
+            "the reason should say what actually happened, got {reason:?}"
+        );
+        assert!(outcome.observations.is_empty());
+    }
+
+    #[test]
+    fn a_panic_with_a_formatted_message_is_preserved_too() {
+        let panicked: std::thread::Result<StrategyOutcome> =
+            Err(Box::new(String::from("index out of bounds: 7")));
+        let reason = outcome_from_join(panicked).problem.unwrap();
+        assert!(reason.contains("index out of bounds: 7"), "got {reason:?}");
+    }
+
+    #[test]
+    fn a_strategy_that_returned_normally_is_untouched() {
+        let outcome = outcome_from_join(Ok(StrategyOutcome::ok(vec![obs("10.0.0.1")])));
+        assert!(outcome.problem.is_none());
+        assert_eq!(outcome.observations.len(), 1);
     }
 
     #[test]
