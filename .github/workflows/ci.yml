@@ -86,5 +86,9 @@ jobs:
         run: npm ci && npm run build
         working-directory: ui
 
+      # `custom-protocol` is what makes this the binary you would actually
+      # ship. Without it tauri builds the dev variant, which loads `devUrl`
+      # and cannot run on its own -- so this job used to pass on something
+      # nobody could launch.
       - name: Build the GUI
-        run: cargo build -p laninv-gui
+        run: cargo build -p laninv-gui --features laninv-gui/custom-protocol
