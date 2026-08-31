@@ -129,7 +129,7 @@ export default function SettingsPanel() {
               ))}
             </ul>
             <p className="muted small">
-              Or point <code>LANINV_HELPER</code> at it directly.
+              Or point <code>MIPSCAN_HELPER</code> at it directly.
             </p>
           </>
         )}

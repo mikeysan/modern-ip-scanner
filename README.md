@@ -91,7 +91,7 @@ mipscan history <id|key>                      per-device timeline
 mipscan export [--format csv|json] [--network KEY]
 ```
 
-`LANINV_DB=/path/db.sqlite3` overrides the database location (default:
+`MIPSCAN_DB=/path/db.sqlite3` overrides the database location (default:
 `%APPDATA%/modern-ip-scanner/modern-ip-scanner.sqlite3` on Windows,
 `~/.local/share/modern-ip-scanner/modern-ip-scanner.sqlite3` on Linux).
 
@@ -134,7 +134,7 @@ rewrite.
 - Packaging is not configured: `bundle.active` is false, so there is no
   installer and nothing ships the optional helper. Build it with
   `cargo build -p modern-ip-scanner-helper` and put it beside the app, or point
-  `LANINV_HELPER` at it — the Settings panel lists every path that is checked.
+  `MIPSCAN_HELPER` at it — the Settings panel lists every path that is checked.
 - The Linux code paths have now been built, tested and **run** natively
   (Ubuntu 24.04 on WSL2): the full suite passes there, and the helper's
   raw-socket ARP resolves real addresses as root. What remains unproven is
