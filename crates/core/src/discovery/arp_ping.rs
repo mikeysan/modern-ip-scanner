@@ -17,10 +17,6 @@ impl Strategy for ArpPing {
         "arp-ping"
     }
 
-    fn requires(&self) -> Capability {
-        Capability::ArpResolve
-    }
-
     /// The only strategy that probes every address, so the only one whose
     /// silence about an address is evidence that nothing is there.
     fn coverage(&self) -> super::Coverage {

@@ -111,10 +111,6 @@ impl Strategy for PingSweep {
         "ping-sweep"
     }
 
-    fn requires(&self) -> Capability {
-        Capability::IcmpEcho
-    }
-
     fn wave(&self) -> u8 {
         2
     }

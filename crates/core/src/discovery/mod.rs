@@ -1,8 +1,10 @@
 //! Pluggable discovery strategies.
 //!
-//! A strategy produces `Observation`s for the interface under scan. It
-//! declares the `Capability` it needs; the scanner only counts its output
-//! toward scan completeness when that capability was confirmed at runtime.
+//! A strategy produces `Observation`s for the interface under scan. One that
+//! needs a privilege checks for it itself, at the top of `run`, with
+//! `ctx.has_cap` -- see `arp_ping` and `ping_sweep` -- and returns
+//! `StrategyOutcome::failed` when it is missing, which is what makes the scan
+//! partial.
 //! Strategies must not loop over address ranges — the sole exception is the
 //! privileged `arp-ping` full-coverage strategy.
 
@@ -83,10 +85,6 @@ pub enum Coverage {
 pub trait Strategy: Send + Sync {
     /// Stable id used in settings and the `scans.strategies` record.
     fn id(&self) -> &'static str;
-
-    fn requires(&self) -> Capability {
-        Capability::NeighborCache
-    }
 
     /// Whether this strategy's silence is evidence of absence.
     fn coverage(&self) -> Coverage {
