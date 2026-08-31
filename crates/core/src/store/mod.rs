@@ -193,12 +193,13 @@ impl Store {
 
     // ----- settings -----
 
-    pub fn get_setting(&self, key: &str) -> Option<String> {
+    /// `Ok(None)` means the setting is not set. A broken database is an error,
+    /// not a missing setting.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
             .optional()
-            .ok()
-            .flatten()
+            .map_err(StoreError::Sql)
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
@@ -210,10 +211,11 @@ impl Store {
         Ok(())
     }
 
-    pub fn grace_scans(&self) -> u32 {
-        self.get_setting("grace_scans")
+    pub fn grace_scans(&self) -> Result<u32> {
+        Ok(self
+            .get_setting("grace_scans")?
             .and_then(|v| v.parse().ok())
-            .unwrap_or(2)
+            .unwrap_or(2))
     }
 
     // ----- networks -----
@@ -245,14 +247,17 @@ impl Store {
         Ok(n == 1)
     }
 
-    pub fn get_network_label(&self, key: &str) -> Option<String> {
+    /// `Ok(None)` covers both "no such network" and "network with no label":
+    /// `label` is nullable, so the column must be read as an `Option` -- reading
+    /// it as a `String` turns an unlabelled network into a decode error.
+    pub fn get_network_label(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row("SELECT label FROM networks WHERE key = ?1", [key], |r| {
-                r.get(0)
+                r.get::<_, Option<String>>(0)
             })
             .optional()
-            .ok()
-            .flatten()
+            .map(Option::flatten)
+            .map_err(StoreError::Sql)
     }
 
     /// Settings a frontend may change. Anything else is internal to the store.
@@ -274,8 +279,7 @@ impl Store {
         )?;
         let rows: Vec<NetworkView> = stmt
             .query_map([r], row_network)?
-            .filter_map(|x| x.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(match rows.first() {
             // An exact hit wins outright; otherwise a single prefix match.
             Some(first) if first.key == r => Some(first.clone()),
@@ -358,7 +362,7 @@ impl Store {
                 .conn
                 .prepare("SELECT key FROM devices WHERE mac = ?1")?;
             let rows = stmt.query_map([mac], |r| r.get(0))?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         // Prefer devices that are not superseded (i.e. are somebody's canonical).
         let mut resolved: Vec<String> = canonical_targets
@@ -380,7 +384,7 @@ impl Store {
             let keys: Vec<String> = {
                 let json = serde_json::to_string(&resolved).unwrap();
                 let rows = stmt.query_map([json], |r| r.get(0))?;
-                rows.filter_map(|r| r.ok()).collect()
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
             if let Some(k) = keys.first() {
                 return self.get_device(k);
@@ -404,8 +408,7 @@ impl Store {
         )?;
         let rows: Vec<DeviceRow> = stmt
             .query_map(params![name, network_key], row_device)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.len() == 1 {
             Ok(Some(rows.into_iter().next().unwrap()))
         } else {
@@ -455,8 +458,7 @@ impl Store {
         )?;
         let rows: Vec<DeviceRow> = stmt
             .query_map([r], row_device)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(if rows.len() == 1 {
             rows.into_iter().next()
         } else {
@@ -787,36 +789,35 @@ impl Store {
     fn latest_statuses(
         &self,
         network_key: &str,
-    ) -> std::collections::HashMap<String, DeviceStatus> {
+    ) -> Result<std::collections::HashMap<String, DeviceStatus>> {
         let mut out = std::collections::HashMap::new();
-        let Ok(Some((scan_id, _))) = self.last_scan_for_network(network_key) else {
-            return out;
+        let Some((scan_id, _)) = self.last_scan_for_network(network_key)? else {
+            return Ok(out);
         };
-        if let Ok(mut stmt) = self
+        let mut stmt = self
             .conn
-            .prepare("SELECT device_key, kind FROM transitions WHERE scan_id = ?1")
-        {
-            if let Ok(rows) = stmt.query_map([scan_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            }) {
-                for (key, kind) in rows.flatten() {
-                    let status = match kind.as_str() {
-                        "new" => DeviceStatus::New,
-                        "changed" => DeviceStatus::Changed,
-                        "gone" => DeviceStatus::Gone,
-                        _ => continue, // `returned` is presence, not standing
-                    };
-                    out.insert(key, status);
-                }
-            }
+            .prepare("SELECT device_key, kind FROM transitions WHERE scan_id = ?1")?;
+        let rows = stmt.query_map([scan_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, kind) = row?;
+            let status = match kind.as_str() {
+                "new" => DeviceStatus::New,
+                "changed" => DeviceStatus::Changed,
+                "gone" => DeviceStatus::Gone,
+                _ => continue, // `returned` is presence, not standing
+            };
+            out.insert(key, status);
         }
-        out
+        Ok(out)
     }
 
     pub fn list_devices(&self, network_key: Option<&str>) -> Result<Vec<DeviceView>> {
-        let statuses = network_key
-            .map(|nk| self.latest_statuses(nk))
-            .unwrap_or_default();
+        let statuses = match network_key {
+            Some(nk) => self.latest_statuses(nk)?,
+            None => std::collections::HashMap::new(),
+        };
         let sql = "SELECT d.id, d.key, d.primary_name, d.mac, d.vendor, d.first_seen, d.last_seen,
                           u.name, u.notes,
                           (SELECT group_concat(p.network_key) FROM presence p WHERE p.device_key = d.key),
@@ -872,10 +873,9 @@ impl Store {
                     .prepare(&format!("{sql} ORDER BY d.last_seen DESC"))?;
                 let mut views: Vec<DeviceView> = stmt
                     .query_map([], make_view)?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 for v in &mut views {
-                    v.last_ip = self.latest_ip_any(&v.key);
+                    v.last_ip = self.latest_ip_any(&v.key)?;
                     v.display_name = crate::display::device_display(
                         v.user_name.as_deref(),
                         v.primary_name.as_deref(),
@@ -893,10 +893,9 @@ impl Store {
                 ))?;
                 let mut views: Vec<DeviceView> = stmt
                     .query_map([nk], make_view)?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 for v in &mut views {
-                    v.last_ip = self.latest_ip_on(&v.key, nk);
+                    v.last_ip = self.latest_ip_on(&v.key, nk)?;
                     v.display_name = crate::display::device_display(
                         v.user_name.as_deref(),
                         v.primary_name.as_deref(),
@@ -910,28 +909,30 @@ impl Store {
         }
     }
 
-    fn latest_ip_on(&self, key: &str, network_key: &str) -> Option<String> {
+    /// `presence.last_ip` is nullable, so it is read as an `Option`: a device
+    /// present but never seen at an address is not a decode error.
+    fn latest_ip_on(&self, key: &str, network_key: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
                 "SELECT last_ip FROM presence WHERE device_key = ?1 AND network_key = ?2",
                 params![key, network_key],
-                |r| r.get(0),
+                |r| r.get::<_, Option<String>>(0),
             )
             .optional()
-            .ok()
-            .flatten()
+            .map(Option::flatten)
+            .map_err(StoreError::Sql)
     }
 
-    fn latest_ip_any(&self, key: &str) -> Option<String> {
+    fn latest_ip_any(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
                 "SELECT last_ip FROM presence WHERE device_key = ?1 ORDER BY last_seen DESC LIMIT 1",
                 [key],
-                |r| r.get(0),
+                |r| r.get::<_, Option<String>>(0),
             )
             .optional()
-            .ok()
-            .flatten()
+            .map(Option::flatten)
+            .map_err(StoreError::Sql)
     }
 
     pub fn device_history(&self, device_key: &str, limit: i64) -> Result<Vec<HistoryEvent>> {
@@ -943,19 +944,21 @@ impl Store {
              WHERE o.device_key = ?1 ORDER BY o.at DESC, o.rowid DESC LIMIT ?2",
         )?;
         let obs = stmt.query_map(params![canonical, limit], |r| {
-            Ok(HistoryEvent::Observation {
-                at: r.get(0)?,
-                network_key: r.get(1)?,
-                ip: r.get(2)?,
-                mac: r.get(3)?,
-                hostname: r.get(4)?,
-                source: r.get(5)?,
-            })
+            let at: i64 = r.get(0)?;
+            Ok((
+                at,
+                HistoryEvent::Observation {
+                    at,
+                    network_key: r.get(1)?,
+                    ip: r.get(2)?,
+                    mac: r.get(3)?,
+                    hostname: r.get(4)?,
+                    source: r.get(5)?,
+                },
+            ))
         })?;
-        for o in obs.flatten() {
-            if let HistoryEvent::Observation { at, .. } = &o {
-                events.push((*at, o));
-            }
+        for row in obs {
+            events.push(row?);
         }
         let mut stmt = self.conn.prepare(
             "SELECT at, network_key, kind, changes_json FROM transitions
@@ -965,36 +968,40 @@ impl Store {
             let kind_s: String = r.get(2)?;
             let changes: Vec<FieldChange> =
                 serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default();
-            Ok(HistoryEvent::Transition {
-                at: r.get(0)?,
-                network_key: r.get(1)?,
-                kind: match kind_s.as_str() {
-                    "new" => TransitionKind::New,
-                    "changed" => TransitionKind::Changed,
-                    "gone" => TransitionKind::Gone,
-                    _ => TransitionKind::Returned,
+            let at: i64 = r.get(0)?;
+            Ok((
+                at,
+                HistoryEvent::Transition {
+                    at,
+                    network_key: r.get(1)?,
+                    kind: match kind_s.as_str() {
+                        "new" => TransitionKind::New,
+                        "changed" => TransitionKind::Changed,
+                        "gone" => TransitionKind::Gone,
+                        _ => TransitionKind::Returned,
+                    },
+                    changes,
                 },
-                changes,
-            })
+            ))
         })?;
-        for t in trans.flatten() {
-            if let HistoryEvent::Transition { at, .. } = &t {
-                events.push((*at, t));
-            }
+        for row in trans {
+            events.push(row?);
         }
         let mut stmt = self
             .conn
             .prepare("SELECT updated_at, name FROM user_names WHERE device_key = ?1")?;
         let named = stmt.query_map(params![canonical], |r| {
-            Ok(HistoryEvent::Named {
-                at: r.get(0)?,
-                name: r.get(1)?,
-            })
+            let at: i64 = r.get(0)?;
+            Ok((
+                at,
+                HistoryEvent::Named {
+                    at,
+                    name: r.get(1)?,
+                },
+            ))
         })?;
-        for n in named.flatten() {
-            if let HistoryEvent::Named { at, .. } = &n {
-                events.push((*at, n));
-            }
+        for row in named {
+            events.push(row?);
         }
         events.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         events.truncate(limit as usize);
@@ -1004,7 +1011,7 @@ impl Store {
     /// Delete observations older than the configured retention window.
     pub fn prune(&self) -> Result<usize> {
         let days: i64 = self
-            .get_setting("observations_retention_days")
+            .get_setting("observations_retention_days")?
             .and_then(|v| v.parse().ok())
             .unwrap_or(90);
         let cutoff = now() - days * 86_400;
@@ -1271,10 +1278,38 @@ mod tests {
     }
 
     #[test]
+    fn an_unlabelled_network_is_not_a_database_error() {
+        // `networks.label` and `presence.last_ip` are both nullable. Reading
+        // either as a String makes a perfectly good row a decode error --
+        // which the old `.ok().flatten()` swallowed into None, hiding it.
+        // Now that the error is propagated, the column type has to be honest.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        assert_eq!(store.get_network_label("net1").unwrap(), None);
+        assert_eq!(store.get_network_label("nosuchnet").unwrap(), None);
+        assert!(store.set_network_label("net1", "Home").unwrap());
+        assert_eq!(
+            store.get_network_label("net1").unwrap().as_deref(),
+            Some("Home")
+        );
+
+        // Same shape for presence.last_ip, reached through list_devices.
+        store.upsert_device("k1", None, None, None, "net1").unwrap();
+        let tx = store.begin().unwrap();
+        Store::upsert_presence_tx(&tx, "k1", "net1", None).unwrap();
+        tx.commit().unwrap();
+        let devices = store.list_devices(Some("net1")).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].last_ip, None);
+    }
+
+    #[test]
     fn grace_setting_roundtrip() {
         let (_d, store) = tmp_store();
-        assert_eq!(store.grace_scans(), 2);
+        assert_eq!(store.grace_scans().unwrap(), 2);
         store.set_setting("grace_scans", "3").unwrap();
-        assert_eq!(store.grace_scans(), 3);
+        assert_eq!(store.grace_scans().unwrap(), 3);
     }
 }

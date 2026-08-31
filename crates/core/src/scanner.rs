@@ -128,12 +128,8 @@ fn absence_evidence_gap(
 fn snapshot_prior(store: &Store, net_key: &str) -> Result<HashMap<String, PriorState>, StoreError> {
     let mut prior = HashMap::new();
     for p in store.presence_for_network(net_key)? {
-        let device = store.get_device(&p.device_key).ok().flatten();
-        let user_name = store
-            .get_user_name(&p.device_key)
-            .ok()
-            .flatten()
-            .map(|(n, _)| n);
+        let device = store.get_device(&p.device_key)?;
+        let user_name = store.get_user_name(&p.device_key)?.map(|(n, _)| n);
         let display = crate::display::device_display(
             user_name.as_deref(),
             device.as_ref().and_then(|d| d.primary_name.as_deref()),
@@ -221,7 +217,7 @@ fn resolve_observed(
                 (key, d.name.clone(), d.mac.clone())
             }
         };
-        let user_name = store.get_user_name(&key).ok().flatten().map(|(n, _)| n);
+        let user_name = store.get_user_name(&key)?.map(|(n, _)| n);
         let display = crate::display::device_display(
             user_name.as_deref(),
             d.name.as_deref(),
@@ -410,19 +406,18 @@ pub fn run_scan(
     progress(&format!("network: {subnet} (key {net_key})"));
 
     // 3. Decide the strategy set.
-    let enabled: Vec<String> = opts.strategies.clone().unwrap_or_else(|| {
-        serde_json::from_str(
-            &store
-                .get_setting("enabled_strategies")
-                .unwrap_or_else(|| "[]".into()),
-        )
-        .unwrap_or_default()
-    });
+    let enabled: Vec<String> = match opts.strategies.clone() {
+        Some(explicit) => explicit,
+        None => {
+            let stored = store.get_setting("enabled_strategies")?;
+            serde_json::from_str(stored.as_deref().unwrap_or("[]")).unwrap_or_default()
+        }
+    };
     let strategies: Vec<_> = registry()
         .into_iter()
         .filter(|s| enabled.iter().any(|e| e == s.id()))
         .collect();
-    let grace = store.grace_scans();
+    let grace = store.grace_scans()?;
 
     // 4. Run waves.
     let mut all_observations: Vec<Observation> = Vec::new();
@@ -650,12 +645,14 @@ pub fn run_scan(
     }
     tx.commit()?;
 
+    // Best-effort maintenance, deliberately ignored: the scan is already
+    // committed, and a failed prune must not turn a good scan into an error.
     let _ = store.prune();
 
     Ok(ScanReport {
         scan_id,
         network_key: net_key.clone(),
-        network_label: store.get_network_label(&net_key),
+        network_label: store.get_network_label(&net_key)?,
         started_at,
         finished_at,
         partial,

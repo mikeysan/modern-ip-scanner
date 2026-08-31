@@ -125,7 +125,7 @@ fn main() -> Result<()> {
         Command::Diff { network } => {
             let nk = match network {
                 Some(k) => k.clone(),
-                None => most_recent_network(&store)
+                None => most_recent_network(&store)?
                     .context("no scans recorded yet — run `mipscan scan` first")?,
             };
             let (scan_id, at) = store
@@ -210,13 +210,13 @@ fn main() -> Result<()> {
                 store.set_setting(k, v)?;
                 eprintln!("{k} = {v}");
             }
-            (Some(k), None) => match store.get_setting(k) {
+            (Some(k), None) => match store.get_setting(k)? {
                 Some(v) => println!("{v}"),
                 None => anyhow::bail!("'{k}' is not set"),
             },
             (None, _) => {
                 for k in Store::WRITABLE_SETTINGS {
-                    println!("{k} = {}", store.get_setting(k).unwrap_or_default());
+                    println!("{k} = {}", store.get_setting(k)?.unwrap_or_default());
                 }
             }
         },
@@ -268,13 +268,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn most_recent_network(store: &Store) -> Option<String> {
-    store
-        .list_networks()
-        .ok()?
+fn most_recent_network(store: &Store) -> Result<Option<String>> {
+    Ok(store
+        .list_networks()?
         .into_iter()
         .max_by_key(|n| n.last_seen)
-        .map(|n| n.key)
+        .map(|n| n.key))
 }
 
 fn print_report(report: &ScanReport) {

@@ -169,11 +169,13 @@ fn last_diff(
 #[tauri::command]
 fn get_settings(state: SharedState) -> Result<serde_json::Value, String> {
     let store = store_of(&state);
-    let get = |k: &str| store.get_setting(k).unwrap_or_default();
+    let get = |k: &str| -> Result<String, String> {
+        Ok(store.get_setting(k).map_err(store_err)?.unwrap_or_default())
+    };
     Ok(serde_json::json!({
-        "grace_scans": store.grace_scans(),
-        "enabled_strategies": get("enabled_strategies"),
-        "retention_days": get("observations_retention_days"),
+        "grace_scans": store.grace_scans().map_err(store_err)?,
+        "enabled_strategies": get("enabled_strategies")?,
+        "retention_days": get("observations_retention_days")?,
     }))
 }
 
