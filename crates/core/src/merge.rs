@@ -32,6 +32,9 @@ pub fn merge_observations(observations: &[Observation]) -> Vec<ObservedDevice> {
     struct IpAgg {
         ips: Vec<String>,
         mac: Option<String>,
+        /// Confidence of the observation that supplied `mac` -- not the
+        /// aggregate's running maximum, which every MAC-less sighting raises.
+        mac_confidence: f32,
         names: Vec<(NameSource, String)>,
         vendor: Option<String>,
         sources: Vec<String>,
@@ -43,6 +46,7 @@ pub fn merge_observations(observations: &[Observation]) -> Vec<ObservedDevice> {
         let agg = by_ip.entry(o.ip.clone()).or_insert_with(|| IpAgg {
             ips: vec![o.ip.clone()],
             mac: None,
+            mac_confidence: 0.0,
             names: Vec::new(),
             vendor: None,
             sources: Vec::new(),
@@ -50,8 +54,9 @@ pub fn merge_observations(observations: &[Observation]) -> Vec<ObservedDevice> {
         });
         if let Some(mac) = &o.mac {
             // Higher-confidence MAC wins; first writer keeps ties.
-            if agg.mac.is_none() || o.confidence > agg.confidence {
+            if agg.mac.is_none() || o.confidence > agg.mac_confidence {
                 agg.mac = Some(mac.clone());
+                agg.mac_confidence = o.confidence;
             }
         }
         if let Some((src, name)) = &o.name {
@@ -217,6 +222,47 @@ pub fn maybe_refingerprint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An observation with an explicit confidence, for the MAC tie-break.
+    fn obs_conf(ip: &str, mac: Option<&str>, src: &str, confidence: f32) -> Observation {
+        Observation {
+            ip: ip.into(),
+            mac: mac.map(|m| m.into()),
+            name: None,
+            vendor: None,
+            source: src.into(),
+            confidence,
+        }
+    }
+
+    #[test]
+    fn a_nameless_sighting_does_not_outrank_a_later_higher_confidence_mac() {
+        // Real strategy confidences. A stale arp-cache entry (0.5) offers one
+        // MAC; mDNS then names the device without offering a MAC at all
+        // (0.9); the post-ping neighbour re-read offers the current MAC
+        // (0.7). 0.7 beats 0.5, so the re-read MAC must win -- mDNS saying
+        // nothing about MACs cannot decide between two MACs.
+        let observations = vec![
+            obs_conf("10.0.0.5", Some("aa:aa:aa:aa:aa:aa"), "arp-cache", 0.5),
+            Observation {
+                name: Some((NameSource::Mdns, "tv".to_string())),
+                ..obs_conf("10.0.0.5", None, "mdns", 0.9)
+            },
+            obs_conf(
+                "10.0.0.5",
+                Some("bb:bb:bb:bb:bb:bb"),
+                "neighbor-recheck",
+                0.7,
+            ),
+        ];
+        let merged = merge_observations(&observations);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].mac.as_deref(),
+            Some("bb:bb:bb:bb:bb:bb"),
+            "the higher-confidence MAC must win; a MAC-less sighting must not raise the bar"
+        );
+    }
 
     fn obs(ip: &str, mac: Option<&str>, name: Option<(&str, &str)>, src: &str) -> Observation {
         Observation {
