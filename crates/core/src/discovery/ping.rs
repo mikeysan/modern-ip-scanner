@@ -144,14 +144,13 @@ fn linux_icmp_dgram(addr: IpAddr, timeout: Duration) -> bool {
 /// Resolve an IPv4 address to a MAC via ARP without leaving userspace APIs:
 /// Windows `SendARP` (works unprivileged on most systems) or the helper.
 #[cfg(windows)]
-pub fn native_arp_resolve(ip: &str, timeout_hint_ms: u32) -> Option<String> {
+pub fn native_arp_resolve(ip: &str) -> Option<String> {
     use windows::Win32::NetworkManagement::IpHelper::SendARP;
 
     let v4: [u8; 4] = ip.parse::<std::net::Ipv4Addr>().ok()?.octets();
     unsafe {
         let mut mac_bytes = [0u8; 8];
         let mut len: u32 = 8;
-        let _ = timeout_hint_ms;
         let rc = SendARP(
             u32::from_ne_bytes(v4),
             0,
@@ -171,7 +170,7 @@ pub fn native_arp_resolve(ip: &str, timeout_hint_ms: u32) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn native_arp_resolve(_ip: &str, _timeout_hint_ms: u32) -> Option<String> {
+pub fn native_arp_resolve(_ip: &str) -> Option<String> {
     // Raw AF_PACKET sockets require root; without the helper there is no
     // unprivileged native ARP on Linux.
     None
