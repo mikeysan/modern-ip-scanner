@@ -694,17 +694,23 @@ impl Store {
     pub fn transitions_of_scan(&self, scan_id: i64) -> Result<Vec<Transition>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.kind, t.device_key, t.changes_json,
-                    coalesce(u.name, d.primary_name, d.mac, t.device_key),
-                    d.primary_name, d.mac
+                    u.name, d.primary_name, d.mac, p.last_ip
              FROM transitions t
              LEFT JOIN devices d ON d.key = t.device_key
              LEFT JOIN user_names u ON u.device_key = t.device_key
+             LEFT JOIN presence p
+                    ON p.device_key = t.device_key AND p.network_key = t.network_key
              WHERE t.scan_id = ?1 ORDER BY t.id",
         )?;
         let rows = stmt.query_map([scan_id], |r| {
             let kind_s: String = r.get(0)?;
             let changes: Vec<FieldChange> =
                 serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default();
+            let device_key: String = r.get(1)?;
+            let user_name: Option<String> = r.get(3)?;
+            let primary_name: Option<String> = r.get(4)?;
+            let mac: Option<String> = r.get(5)?;
+            let last_ip: Option<String> = r.get(6)?;
             Ok(Transition {
                 kind: match kind_s.as_str() {
                     "new" => TransitionKind::New,
@@ -712,14 +718,22 @@ impl Store {
                     "gone" => TransitionKind::Gone,
                     _ => TransitionKind::Returned,
                 },
-                device_key: r.get(1)?,
-                device_display: r.get(3)?,
+                // Same rule as the device list, so one device reads the same
+                // in both -- it used to coalesce to the raw key here.
+                device_display: crate::display::device_display(
+                    user_name.as_deref(),
+                    primary_name.as_deref(),
+                    mac.as_deref(),
+                    last_ip.as_deref(),
+                    &device_key,
+                ),
+                device_key,
                 changes,
                 // Derived rather than stored: a device that later gains a
                 // name becomes identifiable, and old rows should say so.
                 unstable_identity: !crate::identity::is_stable(
-                    r.get::<_, Option<String>>(4)?.as_deref(),
-                    r.get::<_, Option<String>>(5)?.as_deref(),
+                    primary_name.as_deref(),
+                    mac.as_deref(),
                 ),
             })
         })?;
@@ -816,12 +830,16 @@ impl Store {
             let networks: Vec<String> = networks_csv
                 .map(|c| c.split(',').map(|s| s.to_string()).collect())
                 .unwrap_or_default();
-            let display_name = user_name
-                .clone()
-                .or_else(|| primary_name.clone())
-                .or_else(|| mac.clone())
-                .unwrap_or_else(|| "?".into());
             let key: String = r.get(1)?;
+            // Provisional: `last_ip` needs a second query, so the caller
+            // recomputes this once it has one.
+            let display_name = crate::display::device_display(
+                user_name.as_deref(),
+                primary_name.as_deref(),
+                mac.as_deref(),
+                None,
+                &key,
+            );
             let identity_stable =
                 crate::identity::is_stable(primary_name.as_deref(), mac.as_deref());
             let announced_gone = r.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0;
@@ -858,6 +876,13 @@ impl Store {
                     .collect();
                 for v in &mut views {
                     v.last_ip = self.latest_ip_any(&v.key);
+                    v.display_name = crate::display::device_display(
+                        v.user_name.as_deref(),
+                        v.primary_name.as_deref(),
+                        v.mac.as_deref(),
+                        v.last_ip.as_deref(),
+                        &v.key,
+                    );
                 }
                 Ok(views)
             }
@@ -872,6 +897,13 @@ impl Store {
                     .collect();
                 for v in &mut views {
                     v.last_ip = self.latest_ip_on(&v.key, nk);
+                    v.display_name = crate::display::device_display(
+                        v.user_name.as_deref(),
+                        v.primary_name.as_deref(),
+                        v.mac.as_deref(),
+                        v.last_ip.as_deref(),
+                        &v.key,
+                    );
                 }
                 Ok(views)
             }
@@ -1011,6 +1043,34 @@ fn row_network(r: &Row<'_>) -> rusqlite::Result<NetworkView> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_reads_the_same_in_the_table_and_in_a_transition() {
+        // A device with no user name, no announced name and no MAC: the one
+        // case where the four old copies of this rule disagreed. The table
+        // said "?", a fresh scan said its IP, and a transition re-read from
+        // the database said its raw sixteen-character key.
+        let (_d, mut store) = tmp_store();
+        store
+            .upsert_network("net1", Some("10.0.0.0/24"), None)
+            .unwrap();
+        store.upsert_device("k1", None, None, None, "net1").unwrap();
+        let tx = store.begin().unwrap();
+        Store::upsert_presence_tx(&tx, "k1", "net1", Some("10.0.0.5")).unwrap();
+        let scan = Store::insert_scan(&tx, 1, 2, "net1", false, "{}", "[]", &[], "{}").unwrap();
+        Store::insert_transition(&tx, scan, 2, "k1", "net1", TransitionKind::New, &[]).unwrap();
+        tx.commit().unwrap();
+
+        let listed = store.list_devices(Some("net1")).unwrap();
+        let transitions = store.transitions_of_scan(scan).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(
+            listed[0].display_name, transitions[0].device_display,
+            "one device must read the same in the table and in a transition"
+        );
+        assert_eq!(listed[0].display_name, "10.0.0.5");
+    }
 
     fn tmp_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();

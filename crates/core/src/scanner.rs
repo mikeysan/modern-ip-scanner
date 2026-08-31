@@ -129,14 +129,18 @@ fn snapshot_prior(store: &Store, net_key: &str) -> Result<HashMap<String, PriorS
     let mut prior = HashMap::new();
     for p in store.presence_for_network(net_key)? {
         let device = store.get_device(&p.device_key).ok().flatten();
-        let display = store
+        let user_name = store
             .get_user_name(&p.device_key)
             .ok()
             .flatten()
-            .map(|(n, _)| n)
-            .or_else(|| device.as_ref().and_then(|d| d.primary_name.clone()))
-            .or_else(|| device.as_ref().and_then(|d| d.mac.clone()))
-            .unwrap_or_else(|| p.device_key.clone());
+            .map(|(n, _)| n);
+        let display = crate::display::device_display(
+            user_name.as_deref(),
+            device.as_ref().and_then(|d| d.primary_name.as_deref()),
+            device.as_ref().and_then(|d| d.mac.as_deref()),
+            p.last_ip.as_deref(),
+            &p.device_key,
+        );
         prior.insert(
             p.device_key.clone(),
             PriorState {
@@ -217,14 +221,14 @@ fn resolve_observed(
                 (key, d.name.clone(), d.mac.clone())
             }
         };
-        let display = store
-            .get_user_name(&key)
-            .ok()
-            .flatten()
-            .map(|(n, _)| n)
-            .or_else(|| d.name.clone())
-            .or_else(|| d.mac.clone())
-            .unwrap_or_else(|| d.ips.first().cloned().unwrap_or_default());
+        let user_name = store.get_user_name(&key).ok().flatten().map(|(n, _)| n);
+        let display = crate::display::device_display(
+            user_name.as_deref(),
+            d.name.as_deref(),
+            d.mac.as_deref(),
+            d.ips.first().map(String::as_str),
+            &key,
+        );
         observed_states.insert(
             key.clone(),
             ObservedState {

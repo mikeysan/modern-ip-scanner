@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use modern_ip_scanner_core::display::{device_display, short_key};
 use modern_ip_scanner_core::model::{DeviceView, NetworkView, ScanReport, TransitionKind};
 use modern_ip_scanner_core::store::Store;
 use modern_ip_scanner_core::util::fmt_time;
@@ -235,9 +236,16 @@ fn main() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&events)?);
             } else {
+                let user_name = store.get_user_name(&dev.key)?.map(|(n, _)| n);
                 println!(
                     "history for {} ({}) — times in UTC",
-                    dev_display(&store, &dev.key),
+                    device_display(
+                        user_name.as_deref(),
+                        dev.primary_name.as_deref(),
+                        dev.mac.as_deref(),
+                        None,
+                        &dev.key
+                    ),
                     short_key(&dev.key)
                 );
                 for e in events {
@@ -267,26 +275,6 @@ fn most_recent_network(store: &Store) -> Option<String> {
         .into_iter()
         .max_by_key(|n| n.last_seen)
         .map(|n| n.key)
-}
-
-fn short_key(key: &str) -> &str {
-    &key[..8.min(key.len())]
-}
-
-fn dev_display(store: &Store, key: &str) -> String {
-    store
-        .get_user_name(key)
-        .ok()
-        .flatten()
-        .map(|(n, _)| n)
-        .or_else(|| {
-            store
-                .get_device(key)
-                .ok()
-                .flatten()
-                .and_then(|d| d.primary_name.or(d.mac).or(Some(d.key)))
-        })
-        .unwrap_or_else(|| key.into())
 }
 
 fn print_report(report: &ScanReport) {
