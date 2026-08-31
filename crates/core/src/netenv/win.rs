@@ -106,7 +106,6 @@ unsafe fn parse_adapters(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Interface>
             ipv6,
             gateway_v4,
             gateway_mac: None,
-            index: a.Anonymous1.Anonymous.IfIndex,
             kind: if_kind(a.IfType),
             up: a.OperStatus == IfOperStatusUp,
         });
@@ -214,10 +213,5 @@ fn row_to_entry(row: &MIB_IPNET_ROW2) -> Option<NeighborEntry> {
     let ip = format!("{}.{}.{}.{}", o.s_b1, o.s_b2, o.s_b3, o.s_b4);
     let unreachable = row.State == NlnsUnreachable || row.State == NlnsIncomplete;
     let reachable = !unreachable;
-    Some(NeighborEntry {
-        ip,
-        mac,
-        interface_index: row.InterfaceIndex,
-        reachable,
-    })
+    Some(NeighborEntry { ip, mac, reachable })
 }

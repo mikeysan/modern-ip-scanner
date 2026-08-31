@@ -104,7 +104,6 @@ unsafe fn collect_ifaddrs() -> Option<Vec<Interface>> {
             ipv6: p.ipv6,
             gateway_v4,
             gateway_mac: None,
-            index: fnv_index(&name),
             kind,
             up,
         });
@@ -122,15 +121,6 @@ fn interface_is_up(name: &str) -> bool {
         }
         Err(_) => true,
     }
-}
-
-fn fnv_index(name: &str) -> u32 {
-    let mut h: u32 = 2166136261;
-    for b in name.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(16777619);
-    }
-    h
 }
 
 struct Route {
@@ -192,11 +182,9 @@ pub fn neighbor_entries() -> Vec<NeighborEntry> {
             continue;
         };
         let flags = u32::from_str_radix(cols[2], 16).unwrap_or(0);
-        let iface_index = fnv_index(cols[5]);
         out.push(NeighborEntry {
             ip,
             mac,
-            interface_index: iface_index,
             reachable: flags & 0x2 != 0,
         });
     }

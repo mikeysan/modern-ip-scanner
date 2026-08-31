@@ -154,7 +154,6 @@ mod tests {
             ipv6: vec![],
             gateway_v4: None,
             gateway_mac: None,
-            index: 1,
             kind: IfKind::Ethernet,
             up: true,
         }

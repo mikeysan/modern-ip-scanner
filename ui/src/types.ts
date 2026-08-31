@@ -73,7 +73,6 @@ export interface InterfaceInfo {
   ipv4: { addr: string; prefix: number }[];
   ipv6: string[];
   gateway_v4: string | null;
-  index: number;
 }
 
 export interface AppStateInfo {

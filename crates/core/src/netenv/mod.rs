@@ -103,7 +103,6 @@ mod tests {
             ipv6: vec![],
             gateway_v4: gateway.map(|g| g.to_string()),
             gateway_mac: None,
-            index: 1,
             kind,
             up,
         }

@@ -210,7 +210,6 @@ pub struct HttpUResponse {
     pub usn: Option<String>,
     pub server: Option<String>,
     pub location: Option<String>,
-    pub st: Option<String>,
 }
 
 impl HttpUResponse {
@@ -245,7 +244,6 @@ pub fn parse_httpu(data: &[u8]) -> Option<HttpUResponse> {
             "USN" => out.usn = Some(v.into()),
             "SERVER" => out.server = Some(v.into()),
             "LOCATION" => out.location = Some(v.into()),
-            "ST" | "NT" => out.st = Some(v.into()),
             _ => {}
         }
     }

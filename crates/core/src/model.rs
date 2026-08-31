@@ -19,8 +19,6 @@ pub struct Interface {
     pub gateway_v4: Option<String>,
     /// Gateway MAC, resolved lazily by the scanner via the neighbor cache.
     pub gateway_mac: Option<String>,
-    /// OS interface index.
-    pub index: u32,
     /// Rough kind, used in the network composite key.
     pub kind: IfKind,
     /// Operationally up. A disconnected adapter keeps its configuration, so
@@ -81,7 +79,6 @@ impl Ipv4Cidr {
 pub struct NeighborEntry {
     pub ip: String,
     pub mac: String,
-    pub interface_index: u32,
     /// true when the entry is reachable/reachable-ish (not failed/incomplete).
     pub reachable: bool,
 }
@@ -93,16 +90,6 @@ pub enum NameSource {
     Ssdp,
     Netbios,
     Mdns,
-}
-
-impl NameSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            NameSource::Ssdp => "ssdp",
-            NameSource::Netbios => "netbios",
-            NameSource::Mdns => "mdns",
-        }
-    }
 }
 
 /// A single fact observed by one strategy.
