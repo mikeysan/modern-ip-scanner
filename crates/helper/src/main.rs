@@ -87,22 +87,26 @@ const MAX_BATCH: usize = 128;
 /// turns a batch from `n` waits into `n / BATCH_CONCURRENCY` of them.
 const BATCH_CONCURRENCY: usize = 32;
 
-fn handle(line: &str) -> String {
+/// Answer one request. The second element says whether the connection should
+/// close afterwards -- decided from the parsed op, never from the text of the
+/// line.
+fn handle(line: &str) -> (String, bool) {
     let req: Req = match serde_json::from_str(line.trim()) {
         Ok(r) => r,
         Err(_) => {
-            return r#"{"ok":false,"error":"bad request"}"#.to_string();
+            return (r#"{"ok":false,"error":"bad request"}"#.to_string(), false);
         }
     };
     let resp = match req.op.as_str() {
         "shutdown" => {
-            return serde_json::to_string(&Resp {
+            let reply = serde_json::to_string(&Resp {
                 ok: true,
                 mac: None,
                 macs: None,
                 error: None,
             })
             .unwrap_or_default();
+            return (reply, true);
         }
         "arp" => match req.ip.as_deref().and_then(valid_ipv4) {
             Some(ip) => match arp_resolve(ip) {
@@ -157,7 +161,7 @@ fn handle(line: &str) -> String {
             error: Some("unknown op"),
         },
     };
-    serde_json::to_string(&resp).unwrap_or_default()
+    (serde_json::to_string(&resp).unwrap_or_default(), false)
 }
 
 /// Resolve a batch of addresses concurrently, one result slot per input.
@@ -346,11 +350,11 @@ fn serve_stdio() {
     let mut out = stdout.lock();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
-        let reply = handle(&line);
+        let (reply, exit) = handle(&line);
         if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
             break;
         }
-        if line.contains("\"shutdown\"") {
+        if exit {
             break;
         }
     }
@@ -544,11 +548,11 @@ fn serve_pipe(name: &str, owner_sid: &str) -> i32 {
         match reader.read_line(&mut line) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                let reply = handle(&line);
+                let (reply, exit) = handle(&line);
                 if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
                     break;
                 }
-                if line.contains("\"shutdown\"") {
+                if exit {
                     break;
                 }
             }
@@ -944,9 +948,20 @@ wlan0	0000A8C0	00000000	0001	0	0	600	0000FFFF	0	0	0
     /// A batch exists so an exhaustive sweep costs one round trip instead of
     /// 254 serialized ones; positional results are what let the caller line
     /// them back up with its own list.
+    /// The shutdown decision must come from the parsed op, not from the text
+    /// of the line: a request that merely contains the word must be answered
+    /// and the connection kept.
+    #[test]
+    fn only_a_shutdown_op_shuts_the_helper_down() {
+        let (_, exit) = super::handle(r#"{"op":"arp","ip":"\"shutdown\""}"#);
+        assert!(!exit, "an arp request is not a shutdown");
+        let (_, exit) = super::handle(r#"{"op":"shutdown"}"#);
+        assert!(exit, "a shutdown op is");
+    }
+
     #[test]
     fn a_batch_answers_every_address_in_order() {
-        let reply =
+        let (reply, _) =
             super::handle(r#"{"op":"arp-batch","ips":["not-an-ip","also-bad","1.2.3.4.5"]}"#);
         let v: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
         assert_eq!(v["ok"], serde_json::json!(true), "reply was {reply}");
@@ -965,7 +980,7 @@ wlan0	0000A8C0	00000000	0001	0	0	600	0000FFFF	0	0	0
             .map(|i| format!("10.0.{}.{}", i / 256, i % 256))
             .collect();
         let req = serde_json::json!({"op": "arp-batch", "ips": ips}).to_string();
-        let reply = super::handle(&req);
+        let (reply, _) = super::handle(&req);
         let v: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
         assert_eq!(v["ok"], serde_json::json!(false), "reply was {reply}");
     }
@@ -973,7 +988,7 @@ wlan0	0000A8C0	00000000	0001	0	0	600	0000FFFF	0	0	0
     /// An `arp-batch` with no `ips` is a malformed request, not an empty one.
     #[test]
     fn a_batch_without_addresses_is_an_error() {
-        let reply = super::handle(r#"{"op":"arp-batch"}"#);
+        let (reply, _) = super::handle(r#"{"op":"arp-batch"}"#);
         let v: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
         assert_eq!(v["ok"], serde_json::json!(false), "reply was {reply}");
     }
