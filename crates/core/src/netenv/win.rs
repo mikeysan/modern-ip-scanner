@@ -3,7 +3,7 @@
 //! - Interfaces: `GetAdaptersAddresses` (unicast + gateway + physical address)
 //! - Neighbor cache: `GetIpNetTable2`
 
-use crate::identity::normalize_mac;
+use crate::identity::mac_from_bytes;
 use crate::model::{IfKind, Interface, Ipv4Cidr, NeighborEntry};
 
 use windows::Win32::Foundation::NO_ERROR;
@@ -48,17 +48,7 @@ unsafe fn parse_adapters(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Interface>
     let mut current = head;
     while !current.is_null() {
         let a = &*current;
-        let mac = if a.PhysicalAddressLength as usize >= 6 {
-            let bytes = &a.PhysicalAddress[..a.PhysicalAddressLength as usize];
-            let s: String = bytes
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(":");
-            normalize_mac(&s)
-        } else {
-            None
-        };
+        let mac = mac_from_bytes(&a.PhysicalAddress[..a.PhysicalAddressLength as usize]);
 
         let mut ipv4 = Vec::new();
         let mut ipv6 = Vec::new();
@@ -195,15 +185,7 @@ fn row_to_entry(row: &MIB_IPNET_ROW2) -> Option<NeighborEntry> {
     use windows::Win32::Networking::WinSock::NlnsUnreachable;
 
     let len = row.PhysicalAddressLength as usize;
-    if len < 6 {
-        return None;
-    }
-    let mac: String = row.PhysicalAddress[..len]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(":");
-    let mac = normalize_mac(&mac)?;
+    let mac = mac_from_bytes(&row.PhysicalAddress[..len])?;
     let family = unsafe { row.Address.si_family };
     if family != AF_INET {
         return None;

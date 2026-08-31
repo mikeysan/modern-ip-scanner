@@ -31,6 +31,17 @@ pub fn normalize_mac(input: &str) -> Option<String> {
     )
 }
 
+/// The first six bytes of a hardware address as a normalized MAC string.
+///
+/// The platform APIs hand back a fixed-size buffer with a separate length, so
+/// anything shorter than six bytes is not an address; anything longer is
+/// padding. All-zero and broadcast are rejected by [`normalize_mac`].
+pub fn mac_from_bytes(bytes: &[u8]) -> Option<String> {
+    let six: &[u8] = bytes.get(..6)?;
+    let hex: String = six.iter().map(|b| format!("{b:02x}")).collect();
+    normalize_mac(&hex)
+}
+
 /// OUI portion of a normalized MAC (`aa:bb:cc`).
 pub fn oui(mac: &str) -> Option<String> {
     let parts: Vec<&str> = mac.split(':').collect();
@@ -138,6 +149,31 @@ pub fn device_key(primary_name: Option<&str>, mac: Option<&str>, origin_network:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bytes_become_a_normalized_mac_or_nothing() {
+        assert_eq!(
+            mac_from_bytes(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]).as_deref(),
+            Some("aa:bb:cc:dd:ee:ff")
+        );
+        // Longer buffers are what the platform APIs hand back; take the first
+        // six and ignore the padding.
+        assert_eq!(
+            mac_from_bytes(&[0x90, 0x48, 0x46, 0x10, 0x3B, 0x7A, 0x00, 0x00]).as_deref(),
+            Some("90:48:46:10:3b:7a")
+        );
+        assert_eq!(mac_from_bytes(&[0xAA, 0xBB, 0xCC]), None, "too short");
+        assert_eq!(
+            mac_from_bytes(&[0u8; 6]),
+            None,
+            "all-zero is not an identity"
+        );
+        assert_eq!(
+            mac_from_bytes(&[0xffu8; 6]),
+            None,
+            "broadcast is not either"
+        );
+    }
 
     #[test]
     fn a_uuid_hostname_is_an_identifier_not_a_name() {

@@ -55,12 +55,7 @@ unsafe fn collect_ifaddrs() -> Option<Vec<Interface>> {
             } else if family == libc::AF_PACKET {
                 let ll = &*(entry.ifa_addr as *const libc::sockaddr_ll);
                 if ll.sll_halen as usize >= 6 {
-                    let mac: String = ll.sll_addr[..6]
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<Vec<_>>()
-                        .join(":");
-                    p.mac = normalize_mac(&mac);
+                    p.mac = crate::identity::mac_from_bytes(&ll.sll_addr);
                 }
             }
         }

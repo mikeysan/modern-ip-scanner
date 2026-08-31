@@ -158,12 +158,7 @@ pub fn native_arp_resolve(ip: &str) -> Option<String> {
             &mut len,
         );
         if rc == 0 && len as usize >= 6 {
-            let mac: String = mac_bytes[..6]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(":");
-            return crate::identity::normalize_mac(&mac);
+            return crate::identity::mac_from_bytes(&mac_bytes);
         }
     }
     None
