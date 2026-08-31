@@ -8,13 +8,6 @@ const MARKS: Record<TransitionKind, string> = {
   returned: "↩",
 };
 
-const LABELS: Record<TransitionKind, string> = {
-  new: "new",
-  changed: "changed",
-  gone: "gone",
-  returned: "returned",
-};
-
 export default function DiffBanner({ diff }: { diff: LastDiff }) {
   const counts = diff.transitions.reduce<Record<string, number>>((acc, t) => {
     acc[t.kind] = (acc[t.kind] ?? 0) + 1;
@@ -24,7 +17,7 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
     diff.transitions.length === 0
       ? "No changes since the last scan."
       : Object.entries(counts)
-          .map(([k, v]) => `${v} ${LABELS[k as TransitionKind]}`)
+          .map(([kind, count]) => `${count} ${kind}`)
           .join(" · ");
 
   return (
@@ -59,10 +52,10 @@ export default function DiffBanner({ diff }: { diff: LastDiff }) {
                   randomised identity
                 </span>
               )}
-              {(t.changes ?? []).length > 0 && (
+              {t.changes.length > 0 && (
                 <span className="muted">
                   {" "}
-                  ({(t.changes ?? []).map((c) => `${c.field}: ${c.from ?? "∅"}→${c.to ?? "∅"}`).join(", ")})
+                  ({t.changes.map((c) => `${c.field}: ${c.from ?? "∅"}→${c.to ?? "∅"}`).join(", ")})
                 </span>
               )}
             </li>

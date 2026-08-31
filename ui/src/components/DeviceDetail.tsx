@@ -6,22 +6,36 @@ interface Props {
   device: DeviceView | null;
   deviceKey: string;
   onRenamed: () => void;
+  onError: (message: string) => void;
   onClose: () => void;
 }
 
-export default function DeviceDetail({ device, deviceKey, onRenamed, onClose }: Props) {
+export default function DeviceDetail({
+  device,
+  deviceKey,
+  onRenamed,
+  onError,
+  onClose,
+}: Props) {
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<HistoryEvent[]>([]);
   const [saving, setSaving] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   useEffect(() => {
     setName(device?.user_name ?? "");
     setNotes(device?.notes ?? "");
+    // An empty list and a failed load are different things: "no history yet"
+    // is what a brand-new device looks like.
+    setHistoryError(null);
     api
       .deviceHistory(deviceKey, 40)
       .then(setHistory)
-      .catch(() => setHistory([]));
+      .catch((e) => {
+        setHistory([]);
+        setHistoryError(String(e));
+      });
   }, [device, deviceKey]);
 
   const save = async () => {
@@ -29,6 +43,8 @@ export default function DeviceDetail({ device, deviceKey, onRenamed, onClose }: 
     try {
       await api.renameDevice(deviceKey, name || null, notes || null);
       onRenamed();
+    } catch (e) {
+      onError(String(e));
     } finally {
       setSaving(false);
     }
@@ -87,11 +103,16 @@ export default function DeviceDetail({ device, deviceKey, onRenamed, onClose }: 
             {e.type === "observation" &&
               `seen ${e.ip}${e.mac ? ` (${e.mac})` : ""}${e.hostname ? ` as ${e.hostname}` : ""} via ${e.source}`}
             {e.type === "transition" &&
-              `${e.kind}${(e.changes ?? []).length ? ": " + (e.changes ?? []).map((c) => `${c.field} ${c.from ?? "?"}→${c.to ?? "?"}`).join(", ") : ""}`}
+              `${e.kind}${e.changes.length ? ": " + e.changes.map((c) => `${c.field} ${c.from ?? "?"}→${c.to ?? "?"}`).join(", ") : ""}`}
             {e.type === "named" && `named “${e.name}”`}
           </li>
         ))}
-        {history.length === 0 && <li className="muted">no history yet</li>}
+        {history.length === 0 &&
+          (historyError ? (
+            <li className="muted">history unavailable — {historyError}</li>
+          ) : (
+            <li className="muted">no history yet</li>
+          ))}
       </ul>
     </aside>
   );

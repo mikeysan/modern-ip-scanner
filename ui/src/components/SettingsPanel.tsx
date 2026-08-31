@@ -17,7 +17,11 @@ const STRATEGY_LABELS: Record<string, { label: string; note: string }> = {
 /** Fallback when the stored `enabled_strategies` is unreadable. */
 const DEFAULT_ENABLED = Object.keys(STRATEGY_LABELS);
 
-export default function SettingsPanel() {
+interface Props {
+  onError: (message: string) => void;
+}
+
+export default function SettingsPanel({ onError }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [grace, setGrace] = useState(2);
   const [retention, setRetention] = useState(90);
@@ -27,8 +31,8 @@ export default function SettingsPanel() {
   const [strategies, setStrategies] = useState<string[]>(DEFAULT_ENABLED);
 
   useEffect(() => {
-    api.getState().then(setState).catch(() => undefined);
-    api.listStrategies().then(setStrategies).catch(() => undefined);
+    api.getState().then(setState).catch((e) => onError(String(e)));
+    api.listStrategies().then(setStrategies).catch((e) => onError(String(e)));
     api.getSettings().then((s) => {
       setSettings(s);
       setGrace(s.grace_scans);
@@ -39,12 +43,19 @@ export default function SettingsPanel() {
         setEnabled(DEFAULT_ENABLED);
       }
     });
-  }, []);
+    // `onError` is App's setError, which React guarantees is stable, so
+    // listing it here does not re-fire this effect.
+  }, [onError]);
 
   const save = async () => {
-    await api.setSetting("grace_scans", String(grace));
-    await api.setSetting("enabled_strategies", JSON.stringify(enabled));
-    await api.setSetting("observations_retention_days", String(retention));
+    try {
+      await api.setSetting("grace_scans", String(grace));
+      await api.setSetting("enabled_strategies", JSON.stringify(enabled));
+      await api.setSetting("observations_retention_days", String(retention));
+    } catch (e) {
+      onError(String(e));
+      return;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };

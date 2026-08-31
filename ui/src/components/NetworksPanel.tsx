@@ -6,15 +6,30 @@ interface Props {
   networks: NetworkView[];
   current: string | null;
   onLabelChanged: () => void;
+  onError: (message: string) => void;
 }
 
-export default function NetworksPanel({ networks, current, onLabelChanged }: Props) {
+export default function NetworksPanel({
+  networks,
+  current,
+  onLabelChanged,
+  onError,
+}: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [label, setLabel] = useState("");
 
   const save = async (key: string) => {
-    if (label.trim()) {
-      await api.setNetworkLabel(key, label.trim()).catch(() => undefined);
+    const next = label.trim();
+    if (!next) {
+      setEditing(null);
+      return;
+    }
+    try {
+      await api.setNetworkLabel(key, next);
+    } catch (e) {
+      // Keep the editor open: closing it looked exactly like success.
+      onError(String(e));
+      return;
     }
     setEditing(null);
     onLabelChanged();

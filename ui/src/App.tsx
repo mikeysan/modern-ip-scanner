@@ -54,7 +54,7 @@ export default function App() {
           setIfaceLabel(`${s.interface.name} (${s.interface.kind})`);
         }
       })
-      .catch(() => undefined);
+      .catch((e) => setError(String(e)));
     const offProgress = onScanProgress((msg) => setProgressMsg(msg));
     const offDone = onScanDone((report: ScanReport) => {
       setScanning(false);
@@ -169,7 +169,6 @@ export default function App() {
           <>
             <DevicesTable
               devices={devices}
-              networkKey={network}
               selected={selected}
               onSelect={(d) => setSelected(d === selected ? null : d)}
             />
@@ -178,6 +177,7 @@ export default function App() {
                 device={devices.find((d) => d.key === selected) ?? null}
                 deviceKey={selected}
                 onRenamed={refresh}
+                onError={setError}
                 onClose={() => setSelected(null)}
               />
             )}
@@ -188,9 +188,10 @@ export default function App() {
             networks={networks}
             current={currentNetwork?.key ?? null}
             onLabelChanged={refresh}
+            onError={setError}
           />
         )}
-        {tab === "settings" && <SettingsPanel />}
+        {tab === "settings" && <SettingsPanel onError={setError} />}
       </main>
 
       <footer className="footer">

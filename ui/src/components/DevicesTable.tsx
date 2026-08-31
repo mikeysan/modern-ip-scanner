@@ -4,7 +4,6 @@ import { fmtTime } from "../api";
 
 interface Props {
   devices: DeviceView[];
-  networkKey: string | null;
   selected: string | null;
   onSelect: (key: string) => void;
 }
