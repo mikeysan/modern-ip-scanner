@@ -173,8 +173,6 @@ fn build_query(id: u16, qname: &str) -> Vec<u8> {
 pub struct DnsRecords {
     /// hostname (as written, e.g. `printer.local`) → IPv4 string list.
     pub a_records: Vec<(String, Vec<String>)>,
-    /// SRV targets seen, for potential future use.
-    pub srv_targets: Vec<String>,
     /// TXT `model=` / `device_description=` values per hostname.
     pub txt_models: Vec<(String, String)>,
 }
@@ -198,12 +196,6 @@ impl DnsRecords {
                         } else {
                             self.a_records.push((rr.name.clone(), vec![ip]));
                         }
-                    }
-                }
-                33 => {
-                    // SRV: prio(2) weight(2) port(2) target(compressed name)
-                    if let Some(target) = read_name(rr.rdata_off + 6, &rr.full_message) {
-                        self.srv_targets.push(target);
                     }
                 }
                 16 => {
@@ -248,10 +240,6 @@ pub struct DnsRr {
     pub name: String,
     pub rtype: u16,
     pub rdata: Vec<u8>,
-    /// Offset of the RDATA within the full message (for compressed SRV names).
-    pub rdata_off: usize,
-    /// The full message, kept for compression-aware re-reads.
-    pub full_message: Vec<u8>,
 }
 
 pub fn parse_dns_message(msg: &[u8]) -> Result<DnsMessage, &'static str> {
@@ -288,8 +276,6 @@ pub fn parse_dns_message(msg: &[u8]) -> Result<DnsMessage, &'static str> {
             name,
             rtype,
             rdata: msg[rdata_off..rdata_off + rdlen].to_vec(),
-            rdata_off,
-            full_message: msg.to_vec(),
         });
         off = rdata_off + rdlen;
     }
