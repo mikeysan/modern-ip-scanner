@@ -37,30 +37,12 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// Parse a dotted-quad IPv4 string into a host-order u32.
 pub fn parse_ipv4(s: &str) -> Option<u32> {
-    let mut out: u32 = 0;
-    let parts: Vec<&str> = s.trim().split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    for part in parts {
-        let octet: u32 = part.parse().ok()?;
-        if octet > 255 || (part.len() > 1 && part.starts_with('0')) {
-            return None;
-        }
-        out = (out << 8) | octet;
-    }
-    Some(out)
+    s.trim().parse::<std::net::Ipv4Addr>().ok().map(u32::from)
 }
 
 /// Format a host-order u32 as dotted quad.
 pub fn format_ipv4(addr: u32) -> String {
-    format!(
-        "{}.{}.{}.{}",
-        (addr >> 24) & 0xff,
-        (addr >> 16) & 0xff,
-        (addr >> 8) & 0xff,
-        addr & 0xff
-    )
+    std::net::Ipv4Addr::from(addr).to_string()
 }
 
 /// True if `ip` (dotted quad) is inside `network`/`prefix_len`.
@@ -121,6 +103,9 @@ mod tests {
         assert_eq!(parse_ipv4("192.168.1"), None);
         assert_eq!(parse_ipv4("192.168.1.256"), None);
         assert_eq!(parse_ipv4("192.168.01.10"), None);
+        // Rust's integer parser accepts a leading '+', so the hand-rolled
+        // octet loop used to read "+1.2.3.4" as 1.2.3.4. Ipv4Addr does not.
+        assert_eq!(parse_ipv4("+1.2.3.4"), None);
     }
 
     #[test]
