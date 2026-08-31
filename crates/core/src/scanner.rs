@@ -379,7 +379,7 @@ pub fn run_scan(
                         priv_state
                             .capabilities
                             .push(crate::model::Capability::ArpResolve);
-                        *helper.lock().unwrap() = Some(h);
+                        *helper.lock().unwrap_or_else(|p| p.into_inner()) = Some(h);
                     }
                     Err(e) => priv_state
                         .notes
@@ -537,7 +537,7 @@ pub fn run_scan(
         strategies_run.len()
     ));
 
-    if let Some(mut h) = helper.lock().unwrap().take() {
+    if let Some(mut h) = helper.lock().unwrap_or_else(|p| p.into_inner()).take() {
         h.shutdown();
         priv_state.helper_connected = false;
     }
