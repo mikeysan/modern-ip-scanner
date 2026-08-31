@@ -52,11 +52,7 @@ pub(crate) fn plan_sweep(candidates: &[String], iface: &Interface) -> SweepPlan 
         return empty();
     };
     let prefix = cidr.prefix.min(32);
-    let mask = if prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix as u32)
-    };
+    let mask = crate::util::netmask(prefix);
     let network = addr & mask;
     let broadcast = network | !mask;
 

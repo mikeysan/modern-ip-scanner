@@ -65,12 +65,9 @@ impl Ipv4Cidr {
     /// `192.168.1.0/24` style string of the network address.
     pub fn network_string(&self) -> Option<String> {
         let a = crate::util::parse_ipv4(&self.addr)?;
-        let mask = if self.prefix == 0 {
-            0
-        } else {
-            u32::MAX << (32 - self.prefix)
-        };
-        Some(crate::util::format_ipv4(a & mask))
+        Some(crate::util::format_ipv4(
+            a & crate::util::netmask(self.prefix),
+        ))
     }
 }
 

@@ -45,15 +45,23 @@ pub fn format_ipv4(addr: u32) -> String {
     std::net::Ipv4Addr::from(addr).to_string()
 }
 
+/// The mask for an on-link prefix length, host order.
+///
+/// A prefix of 0 is special-cased because shifting a `u32` by 32 is undefined
+/// behaviour in Rust and panics in debug builds.
+pub fn netmask(prefix_len: u8) -> u32 {
+    if prefix_len == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix_len as u32)
+    }
+}
+
 /// True if `ip` (dotted quad) is inside `network`/`prefix_len`.
 pub fn ipv4_in_network(ip: &str, network: u32, prefix_len: u8) -> bool {
     match parse_ipv4(ip) {
         Some(a) => {
-            let mask = if prefix_len == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix_len as u32)
-            };
+            let mask = netmask(prefix_len);
             a & mask == network & mask
         }
         None => false,
@@ -68,11 +76,7 @@ pub fn enumerate_network(network: u32, prefix_len: u8) -> Vec<u32> {
     } else {
         1u32 << (32 - prefix_len as u32)
     };
-    let mask = if prefix_len == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix_len as u32)
-    };
+    let mask = netmask(prefix_len);
     (1..count).map(|i| (network & mask) + i).collect()
 }
 
@@ -81,11 +85,7 @@ pub fn enumerate_network(network: u32, prefix_len: u8) -> Vec<u32> {
 pub fn ipv4_in_network_of(ip: &str, iface: &crate::model::Interface) -> bool {
     iface.ipv4.iter().any(|c| match parse_ipv4(&c.addr) {
         Some(a) => {
-            let mask = if c.prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - c.prefix)
-            };
+            let mask = netmask(c.prefix);
             parse_ipv4(ip).is_some_and(|i| i & mask == a & mask)
         }
         None => false,
@@ -95,6 +95,16 @@ pub fn ipv4_in_network_of(ip: &str, iface: &crate::model::Interface) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn netmask_covers_both_ends_of_the_prefix_range() {
+        // The /0 case is the whole reason this is not a one-liner: shifting a
+        // u32 by 32 is undefined and panics in debug builds.
+        assert_eq!(netmask(0), 0);
+        assert_eq!(netmask(8), 0xFF00_0000);
+        assert_eq!(netmask(24), 0xFFFF_FF00);
+        assert_eq!(netmask(32), u32::MAX);
+    }
 
     #[test]
     fn ipv4_roundtrip() {

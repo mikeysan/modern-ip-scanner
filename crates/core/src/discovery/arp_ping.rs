@@ -71,11 +71,7 @@ impl Strategy for ArpPing {
             .iter()
             .filter_map(|c| {
                 let a = crate::util::parse_ipv4(&c.addr)?;
-                let mask = if c.prefix == 0 {
-                    0
-                } else {
-                    u32::MAX << (32 - c.prefix)
-                };
+                let mask = crate::util::netmask(c.prefix);
                 Some((a & mask) | !mask)
             })
             .collect();
