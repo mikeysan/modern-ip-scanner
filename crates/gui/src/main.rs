@@ -45,20 +45,18 @@ impl Drop for ScanGuard {
     }
 }
 
+/// What the UI needs before it can draw: whether writes are being kept, which
+/// interface will be scanned, and whether the optional helper is installed.
+///
+/// Deliberately touches neither the store nor the privilege probe. It used to
+/// do both -- a full device listing for a count nothing displayed, and a live
+/// ICMP echo plus a live SendARP for a capability list nothing displayed -- and
+/// taking the store lock here meant this call queued behind a running scan.
 #[tauri::command]
 fn get_state(state: SharedState<'_>) -> Result<serde_json::Value, String> {
-    let store = store_of(&state);
-    let networks = store.list_networks().map_err(store_err)?;
     let interfaces = modern_ip_scanner_core::netenv::interfaces();
     let iface = modern_ip_scanner_core::netenv::default_interface(&interfaces);
-    // Probing without an interface skips the ARP check entirely on Windows,
-    // so the UI would report a capability set the scanner does not use.
-    let privilege = modern_ip_scanner_core::privilege::probe(iface.as_ref());
     Ok(serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "networks": networks.len(),
-        "devices": store.list_devices(None).map_err(store_err)?.len(),
-        "capabilities": privilege.capabilities.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
         "startup_error": state.startup_error,
         "helper_available": modern_ip_scanner_core::privilege::helper_path().is_some(),
         "helper_search_paths": modern_ip_scanner_core::privilege::helper_search_paths()

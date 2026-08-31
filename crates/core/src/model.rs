@@ -115,16 +115,6 @@ pub enum Capability {
     ArpResolve,
 }
 
-impl Capability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Capability::NeighborCache => "neighbor-cache",
-            Capability::IcmpEcho => "icmp-echo",
-            Capability::ArpResolve => "arp-resolve",
-        }
-    }
-}
-
 /// Result of the runtime capability probe.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrivilegeState {
