@@ -561,13 +561,26 @@ mod tests {
     ///
     /// Driven against the real helper binary over `--stdio`, which needs no
     /// privileges: elevation is the launcher's business, not the protocol's.
+    /// A silently skipped test reports success having asserted nothing, and
+    /// `cargo test` hides the message without `--nocapture`. Locally that is
+    /// the right trade -- `cargo test -p modern-ip-scanner-core` should not
+    /// require the helper to have been built -- but CI sets
+    /// MIPSCAN_HELPER_TESTS=required, where a skip is a failure.
+    fn skip_or_fail(name: &str) {
+        let message = format!(
+            "{name}: no modern-ip-scanner-helper beside the test binary (cargo build -p modern-ip-scanner-helper)"
+        );
+        assert!(
+            std::env::var("MIPSCAN_HELPER_TESTS").as_deref() != Ok("required"),
+            "{message}"
+        );
+        eprintln!("SKIPPED {message}");
+    }
+
     #[test]
     fn each_request_gets_its_own_whole_reply() {
         let Some(bin) = helper_binary() else {
-            eprintln!(
-                "SKIPPED each_request_gets_its_own_whole_reply: no modern-ip-scanner-helper \
-                 beside the test binary (build the workspace first)"
-            );
+            skip_or_fail("each_request_gets_its_own_whole_reply");
             return;
         };
         let mut command = std::process::Command::new(bin);
@@ -603,9 +616,7 @@ mod tests {
     #[test]
     fn a_batch_answers_every_address_and_leaves_the_stream_in_step() {
         let Some(bin) = helper_binary() else {
-            eprintln!(
-                "SKIPPED a_batch_answers_every_address_and_leaves_the_stream_in_step:                  no modern-ip-scanner-helper beside the test binary (build the workspace first)"
-            );
+            skip_or_fail("a_batch_answers_every_address_and_leaves_the_stream_in_step");
             return;
         };
         let mut command = std::process::Command::new(bin);

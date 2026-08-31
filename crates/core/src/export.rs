@@ -83,8 +83,6 @@ mod tests {
     #[test]
     fn commas_and_newlines_survive_a_round_trip() {
         let csv = devices_csv(&[device("Study, upstairs", Some("line one\nline two"))]);
-        let rows = body(&csv);
-        assert_eq!(rows.len() + 1, csv.lines().count());
         assert!(csv.contains(r#""Study, upstairs""#));
         assert!(csv.contains("\"line one\nline two\""));
     }

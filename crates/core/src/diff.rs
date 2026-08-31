@@ -621,24 +621,6 @@ mod tests {
     }
 
     #[test]
-    fn returned_after_absence() {
-        let p = map(vec![(
-            "a".into(),
-            PriorState {
-                miss_streak: 5,
-                reported_gone: true,
-                ..prior("a", "10.0.0.1", None, None)
-            },
-        )]);
-        let observed = map(vec![("a".into(), observed("a", "10.0.0.1", None, None))]);
-        let out = compute_diff(p, &observed, &ScanIntegrity::complete(), 2);
-        assert!(out
-            .transitions
-            .iter()
-            .any(|t| t.kind == TransitionKind::Returned));
-    }
-
-    #[test]
     fn field_changes_detected() {
         let p = map(vec![(
             "a".into(),

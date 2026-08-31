@@ -110,20 +110,32 @@ impl Strategy for Ssdp {
                 .collect()
         });
 
-        let observations = devices
-            .into_iter()
-            .zip(names)
-            .map(|((ip, resp), friendly)| Observation {
-                ip,
-                mac: None,
-                name: ssdp_name(friendly),
-                vendor: resp.server.clone().or_else(|| resp.location_host()),
-                source: self.id().to_string(),
-                confidence: 0.75,
-            })
-            .collect();
-        StrategyOutcome::ok(observations)
+        StrategyOutcome::ok(observations_from(devices, names, self.id()))
     }
+}
+
+/// Turn each answering device and its fetched name into an observation.
+///
+/// Split out from `run` so the naming rule can be tested without a socket:
+/// the decision that a device with no `friendlyName` contributes no name at
+/// all -- rather than its USN uuid -- lives here.
+pub(crate) fn observations_from(
+    devices: Vec<(String, HttpUResponse)>,
+    names: Vec<Option<String>>,
+    source: &str,
+) -> Vec<Observation> {
+    devices
+        .into_iter()
+        .zip(names)
+        .map(|((ip, resp), friendly)| Observation {
+            ip,
+            mac: None,
+            name: ssdp_name(friendly),
+            vendor: resp.server.clone().or_else(|| resp.location_host()),
+            source: source.to_string(),
+            confidence: 0.75,
+        })
+        .collect()
 }
 
 /// How long a single device-description fetch may take.
@@ -310,8 +322,27 @@ mod tests {
     #[test]
     fn a_uuid_is_never_used_as_a_device_name() {
         // The USN UUID is stable but unreadable; showing it in the device list
-        // is worse than showing the MAC.
-        assert_eq!(ssdp_name(None), None);
+        // is worse than showing the MAC. The old version of this test asserted
+        // ssdp_name(None) == None, which holds no matter what the caller does
+        // with the USN -- the decision being protected is in the caller.
+        let resp = HttpUResponse {
+            usn: Some("uuid:2fac2343-31f8-11b2-a56c-123456789012::upnp:rootdevice".into()),
+            server: Some("Linux UPnP/1.0 MiniDLNA".into()),
+            location: Some("http://192.168.1.62:8200/rootDesc.xml".into()),
+        };
+        // No friendlyName came back from the description fetch.
+        let obs = observations_from(vec![("192.168.1.62".into(), resp)], vec![None], "ssdp");
+        assert_eq!(obs.len(), 1);
+        assert_eq!(
+            obs[0].name, None,
+            "a device that offered only a uuid must contribute no name, got {:?}",
+            obs[0].name
+        );
+        assert_eq!(
+            obs[0].vendor.as_deref(),
+            Some("Linux UPnP/1.0 MiniDLNA"),
+            "it still contributes a vendor"
+        );
     }
 
     #[test]

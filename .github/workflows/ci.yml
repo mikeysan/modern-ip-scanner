@@ -44,7 +44,12 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      # --all-targets builds the helper binary, so the two tests that drive it
+      # over --stdio have one to drive. `required` turns their local skip into
+      # a failure: a skipped test that reports success is worse than no test.
       - name: Test
+        env:
+          MIPSCAN_HELPER_TESTS: required
         run: cargo test -p modern-ip-scanner-core -p modern-ip-scanner -p modern-ip-scanner-helper --all-targets
 
       - name: Clippy
