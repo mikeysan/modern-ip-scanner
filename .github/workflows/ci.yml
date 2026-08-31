@@ -44,9 +44,18 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
-      # --all-targets builds the helper binary, so the two tests that drive it
-      # over --stdio have one to drive. `required` turns their local skip into
-      # a failure: a skipped test that reports success is worse than no test.
+      # Two core tests drive the real helper over --stdio, and they look for
+      # the plain binary beside the test binary (target/debug/). `cargo test
+      # --all-targets` does not put one there: for bin targets it compiles a
+      # test harness into deps/ and never emits the ordinary artifact. So it is
+      # built explicitly. Without this the two tests found nothing to drive and
+      # skipped here silently, which is precisely what MIPSCAN_HELPER_TESTS
+      # below exists to prevent.
+      - name: Build the helper binary the protocol tests drive
+        run: cargo build -p modern-ip-scanner-helper
+
+      # `required` turns those tests' local skip into a failure: a skipped test
+      # that reports success is worse than no test.
       - name: Test
         env:
           MIPSCAN_HELPER_TESTS: required
