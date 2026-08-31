@@ -15,7 +15,7 @@ pub fn normalize_mac(input: &str) -> Option<String> {
         .filter(|c| c.is_ascii_hexdigit())
         .map(|c| c.to_ascii_lowercase())
         .collect();
-    if hex.len() != 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+    if hex.len() != 12 {
         return None;
     }
     // All-zero (proxy ARP artifacts) and broadcast MACs are not identities.

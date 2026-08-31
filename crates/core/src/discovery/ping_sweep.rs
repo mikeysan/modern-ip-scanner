@@ -124,7 +124,7 @@ impl Strategy for PingSweep {
         let plan = plan_sweep(&ctx.candidates, &ctx.iface);
         // (address, reportable). Primers go first so that hosts they wake are
         // in the neighbor cache by the time the scanner re-reads it.
-        let mut probes: Vec<(String, bool)> = plan
+        let probes: Vec<(String, bool)> = plan
             .primers
             .into_iter()
             .map(|ip| (ip, false))
@@ -133,9 +133,8 @@ impl Strategy for PingSweep {
         if probes.is_empty() {
             return StrategyOutcome::ok(Vec::new());
         }
-        probes.shrink_to_fit();
 
-        let (tx, rx) = mpsc::channel::<(String, bool)>();
+        let (tx, rx) = mpsc::channel::<String>();
         let probes = std::sync::Arc::new(probes);
         let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         thread::scope(|s| {
@@ -149,7 +148,7 @@ impl Strategy for PingSweep {
                     let (ip, reportable) = &probes[i];
                     let alive = super::ping::echo(ip, TIMEOUT);
                     if alive && *reportable {
-                        let _ = tx.send((ip.clone(), true));
+                        let _ = tx.send(ip.clone());
                     }
                 });
             }
@@ -158,7 +157,7 @@ impl Strategy for PingSweep {
 
         let observations = rx
             .into_iter()
-            .map(|(ip, _)| Observation {
+            .map(|ip| Observation {
                 ip,
                 mac: None,
                 name: None,

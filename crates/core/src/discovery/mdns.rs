@@ -101,9 +101,7 @@ impl Strategy for Mdns {
 
         let mut observations = Vec::new();
         for (hostname, ips) in &records.a_records {
-            let Some(name) = hostname.strip_suffix(".local").or(Some(hostname.as_str())) else {
-                continue;
-            };
+            let name = hostname.strip_suffix(".local").unwrap_or(hostname.as_str());
             for ip in ips {
                 if !crate::util::ipv4_in_network_of(ip, &ctx.iface) {
                     continue;
@@ -308,7 +306,6 @@ fn skip_name(mut off: usize, msg: &[u8]) -> Option<usize> {
 fn read_name(off: usize, msg: &[u8]) -> Option<String> {
     let mut labels = Vec::new();
     let mut pos = off;
-    let mut followed = false;
     let mut jumps = 0;
     while pos < msg.len() {
         let len = msg[pos] as usize;
@@ -320,10 +317,6 @@ fn read_name(off: usize, msg: &[u8]) -> Option<String> {
                 return None;
             }
             let ptr = ((len & 0x3F) << 8) | msg[pos + 1] as usize;
-            if !followed {
-                // Caller continues after the first pointer.
-                followed = true;
-            }
             pos = ptr;
             jumps += 1;
             if jumps > 32 {
