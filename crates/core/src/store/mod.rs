@@ -527,40 +527,6 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn upsert_presence(
-        &self,
-        device_key: &str,
-        network_key: &str,
-        last_ip: Option<&str>,
-    ) -> Result<()> {
-        let t = now();
-        self.conn.execute(
-            "INSERT INTO presence (device_key, network_key, first_seen, last_seen, miss_streak, last_ip)
-             VALUES (?1, ?2, ?3, ?3, 0, ?4)
-             ON CONFLICT(device_key, network_key) DO UPDATE SET
-                last_seen = excluded.last_seen,
-                miss_streak = 0,
-                reported_gone = 0,
-                last_ip = coalesce(excluded.last_ip, presence.last_ip)",
-            params![device_key, network_key, t, last_ip],
-        )?;
-        Ok(())
-    }
-
-    pub fn bump_miss_streak(&self, device_key: &str, network_key: &str) -> Result<i64> {
-        self.conn.execute(
-            "UPDATE presence SET miss_streak = miss_streak + 1
-             WHERE device_key = ?1 AND network_key = ?2",
-            params![device_key, network_key],
-        )?;
-        let streak: i64 = self.conn.query_row(
-            "SELECT miss_streak FROM presence WHERE device_key = ?1 AND network_key = ?2",
-            params![device_key, network_key],
-            |r| r.get(0),
-        )?;
-        Ok(streak)
-    }
-
     /// Presence upsert inside an open transaction (atomic with the scan).
     pub fn upsert_presence_tx(
         tx: &rusqlite::Transaction<'_>,
@@ -1015,15 +981,6 @@ impl Store {
             .execute("DELETE FROM observations WHERE at < ?1", params![cutoff])?;
         Ok(n)
     }
-
-    /// Integrity audit used by tests: no transition rows for partial scans.
-    pub fn gone_transitions_for_scan(&self, scan_id: i64) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT device_key FROM transitions WHERE scan_id = ?1 AND kind = 'gone'")?;
-        let rows = stmt.query_map([scan_id], |r| r.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
 }
 
 fn row_device(r: &Row<'_>) -> rusqlite::Result<DeviceRow> {
@@ -1089,9 +1046,9 @@ mod tests {
         store
             .set_user_name("oldkey", "Office Printer", None)
             .unwrap();
-        store
-            .upsert_presence("oldkey", "net1", Some("192.168.1.50"))
-            .unwrap();
+        let tx = store.begin().unwrap();
+        Store::upsert_presence_tx(&tx, "oldkey", "net1", Some("192.168.1.50")).unwrap();
+        tx.commit().unwrap();
         let tx = store.begin().unwrap();
         let scan_id = Store::insert_scan(&tx, 1, 2, "net1", false, "{}", "[]", &[], "{}").unwrap();
         Store::insert_observation(
@@ -1142,7 +1099,7 @@ mod tests {
 
     #[test]
     fn name_lookup_scoped_to_network() {
-        let (_d, store) = tmp_store();
+        let (_d, mut store) = tmp_store();
         store
             .upsert_device(
                 "k1",
@@ -1152,9 +1109,9 @@ mod tests {
                 "netA",
             )
             .unwrap();
-        store
-            .upsert_presence("k1", "netA", Some("10.0.0.5"))
-            .unwrap();
+        let tx = store.begin().unwrap();
+        Store::upsert_presence_tx(&tx, "k1", "netA", Some("10.0.0.5")).unwrap();
+        tx.commit().unwrap();
         assert!(store
             .find_device_by_name_on_network("LAPTOP", "netA")
             .unwrap()
@@ -1175,14 +1132,12 @@ mod tests {
             .upsert_device("k1", Some("nas"), Some("aa:bb:cc:00:00:01"), None, "net1")
             .unwrap();
         store
-            .upsert_presence("k1", "net1", Some("10.0.0.5"))
-            .unwrap();
-        store
             .upsert_device("k2", Some("tv"), Some("aa:bb:cc:00:00:02"), None, "net1")
             .unwrap();
-        store
-            .upsert_presence("k2", "net1", Some("10.0.0.6"))
-            .unwrap();
+        let tx = store.begin().unwrap();
+        Store::upsert_presence_tx(&tx, "k1", "net1", Some("10.0.0.5")).unwrap();
+        Store::upsert_presence_tx(&tx, "k2", "net1", Some("10.0.0.6")).unwrap();
+        tx.commit().unwrap();
 
         // Unremarkable until a scan says otherwise.
         let before = store.list_devices(Some("net1")).unwrap();
@@ -1217,10 +1172,8 @@ mod tests {
         store
             .upsert_device("k1", Some("nas"), Some("aa:bb:cc:00:00:01"), None, "net1")
             .unwrap();
-        store
-            .upsert_presence("k1", "net1", Some("10.0.0.5"))
-            .unwrap();
         let tx = store.begin().unwrap();
+        Store::upsert_presence_tx(&tx, "k1", "net1", Some("10.0.0.5")).unwrap();
         Store::mark_reported_gone_tx(&tx, "k1", "net1").unwrap();
         Store::insert_scan(&tx, 3, 4, "net1", false, "{}", "[]", &[], "{}").unwrap();
         tx.commit().unwrap();

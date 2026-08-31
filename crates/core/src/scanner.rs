@@ -860,18 +860,21 @@ mod tests {
         let ResolvedScan {
             observed, outcome, ..
         } = resolve_and_diff(store, devices, net, &ScanIntegrity::complete(), 2).unwrap();
+        // One transaction, the same statements in the same order as run_scan:
+        // a helper that commits presence some other way is not reproducing the
+        // scan, it is testing SQL nothing ships.
+        let tx = store.begin().unwrap();
         for key in &outcome.streak_resets {
             let ip = observed.get(key).map(|s| s.ip.clone());
-            store.upsert_presence(key, net, ip.as_deref()).unwrap();
+            Store::upsert_presence_tx(&tx, key, net, ip.as_deref()).unwrap();
         }
         for (key, _) in &outcome.streak_updates {
-            store.bump_miss_streak(key, net).unwrap();
+            Store::bump_miss_streak_tx(&tx, key, net).unwrap();
         }
         for key in &outcome.gone_marks {
-            let tx = store.begin().unwrap();
             Store::mark_reported_gone_tx(&tx, key, net).unwrap();
-            tx.commit().unwrap();
         }
+        tx.commit().unwrap();
         outcome.transitions
     }
 
