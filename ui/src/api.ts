@@ -31,6 +31,7 @@ export const api = {
   startScan: (useHelper: boolean, strategies: string[] | null) =>
     invoke<void>("start_scan", { useHelper, strategies }),
   listInterfaces: () => invoke<InterfaceInfo[]>("list_interfaces"),
+  listStrategies: () => invoke<string[]>("list_strategies"),
 };
 
 export function onScanProgress(cb: (msg: string) => void) {

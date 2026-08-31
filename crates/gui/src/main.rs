@@ -249,6 +249,13 @@ fn list_interfaces() -> Vec<Interface> {
     modern_ip_scanner_core::netenv::interfaces()
 }
 
+/// The strategy ids the core actually registers, so the Settings panel cannot
+/// offer one that does not exist or hide one that does.
+#[tauri::command]
+fn list_strategies() -> Vec<&'static str> {
+    modern_ip_scanner_core::discovery::strategy_ids()
+}
+
 /// Open the inventory, or fall back to a throwaway database so the app can
 /// start and *say* what went wrong. Crashing at launch with no window told the
 /// user nothing — release builds have no console to print to.
@@ -296,6 +303,7 @@ fn main() {
             export_csv,
             start_scan,
             list_interfaces,
+            list_strategies,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Modern IP Scanner GUI");
