@@ -141,16 +141,10 @@ rewrite.
   the `pkexec` launch path, since polkit is absent from that image, and any
   network larger than WSL's own NAT'd subnet.
 
-## Working on this
+## For Contributors
 
-CI builds and tests on Linux and Windows (`.github/workflows/ci.yml`). That
-matters more than usual here: every Linux-only line sits behind a `#[cfg]`
-that a Windows build never type-checks, so the platform rots silently without
-it. Two Linux-only defects were introduced or caught in a single session
-before CI existed.
-
-Locally on Windows you can still check the helper for Linux, because it has no
-C dependencies:
+The helper has no C dependencies, so from Windows you can check it for Linux
+without leaving the machine:
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
@@ -169,6 +163,12 @@ wsl -d Ubuntu-24.04 -e bash -c \
 Exclude `modern-ip-scanner-gui` there unless the Tauri system libraries are installed,
 and build as your normal user rather than root, or rustup will not find a
 toolchain and root-owned files end up in your cargo directories.
+
+CI builds and tests on Linux and Windows (`.github/workflows/ci.yml`). That
+matters more than usual here: every Linux-only line sits behind a `#[cfg]`
+that a Windows build never type-checks, so the platform rots silently without
+it. Two Linux-only defects were introduced or caught in a single session
+before CI existed.
 
 Keep as little as possible behind `#[cfg]`. Wire formats, parsing and address
 arithmetic are platform-independent even when only one platform calls them;
