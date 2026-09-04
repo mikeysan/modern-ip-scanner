@@ -6,11 +6,12 @@
 # runs can be run locally first, unchanged. Everything up to the archive call
 # is plain bash and behaves identically on both runners.
 #
-# Archive formats are not symmetrical, for a reason found by testing: GNU tar
-# cannot write zips. `tar -a -cf out.zip` silently produces a *tar* archive
-# with a .zip name, which Windows cannot open. Neither runner has `zip`, so
-# Windows archives go through PowerShell's Compress-Archive, which is present
-# on any Windows machine.
+# Archive formats are not symmetrical, for reasons found by testing rather
+# than by reading. GNU tar cannot write zips: `tar -a -cf out.zip` silently
+# produces a *tar* archive with a .zip name, which Windows cannot open. Neither
+# runner has `zip`. PowerShell's Compress-Archive can write one but uses
+# backslash separators, which the zip specification forbids and which unpack
+# wrongly everywhere except Windows. So Windows archives go through 7-Zip.
 set -euo pipefail
 
 usage() {
@@ -114,12 +115,18 @@ tar.gz)
     tar -czf "$out" -C "target/package-stage" "$name"
     ;;
 zip)
-    # Relative paths, so no Windows/Unix path translation is needed: PowerShell
-    # inherits the working directory from this shell.
+    # 7-Zip, not PowerShell's Compress-Archive. Compress-Archive writes
+    # backslash path separators, which Windows tolerates but which the zip
+    # specification does not allow: unzip and Python on Linux and macOS then
+    # treat the backslash as part of the filename and drop every file loose
+    # instead of into a folder. 7zip is present on both GitHub Windows runner
+    # images, x64 and ARM64.
+    #
+    # Relative paths throughout, so no Unix-to-Windows path translation is
+    # needed.
     (
         cd "target/package-stage"
-        powershell -NoProfile -NonInteractive -Command \
-            "Compress-Archive -Path '${name}' -DestinationPath '../../${out}' -Force"
+        7z a -tzip -bso0 -bsp0 "../../${out}" "${name}"
     )
     ;;
 esac
