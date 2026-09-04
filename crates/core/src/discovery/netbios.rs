@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `netbios`: NBNS Node Status queries (UDP 137) against candidate
 //! addresses. Windows and Samba hosts answer with their registered names —
 //! a strong, stable identity signal for exactly the devices that don't do

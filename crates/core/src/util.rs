@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Small shared helpers: time formatting and IPv4 arithmetic.
 
 /// Current unix time in whole seconds.

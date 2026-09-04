@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `ssdp`: UPnP/SSDP M-SEARCH discovery on 239.255.255.250:1900.
 //!
 //! Sends M-SEARCH requests, then collects HTTPU responses. Each responding

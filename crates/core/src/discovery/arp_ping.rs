@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `arp-ping`: exhaustive ARP resolution of every address in the interface's
 //! prefix. This is the *only* strategy allowed to loop over an address range,
 //! because it is the only one that yields definitive up/down answers — and it

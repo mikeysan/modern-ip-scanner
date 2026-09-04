@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 export type DeviceStatus = "new" | "changed" | "gone" | "known";
 
 export interface DeviceView {
@@ -110,4 +113,16 @@ export interface Settings {
   grace_scans: number;
   enabled_strategies: string;
   retention_days: string;
+}
+
+/** Licence and provenance shown in Settings > About. Sourced from the backend
+ *  so the version cannot drift from the binary the user is actually running. */
+export interface About {
+  name: string;
+  version: string;
+  copyright: string;
+  license: string;
+  license_name: string;
+  license_url: string;
+  source_url: string;
 }

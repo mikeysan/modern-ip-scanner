@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  About,
   AppStateInfo,
   DeviceView,
   HistoryEvent,
@@ -32,6 +36,7 @@ export const api = {
     invoke<void>("start_scan", { useHelper, strategies }),
   listInterfaces: () => invoke<InterfaceInfo[]>("list_interfaces"),
   listStrategies: () => invoke<string[]>("list_strategies"),
+  about: () => invoke<About>("about"),
 };
 
 export function onScanProgress(cb: (msg: string) => void) {

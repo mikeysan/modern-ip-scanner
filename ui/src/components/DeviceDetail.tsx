@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 import { useEffect, useState } from "react";
 import { api, fmtTime } from "../api";
 import type { DeviceView, HistoryEvent } from "../types";

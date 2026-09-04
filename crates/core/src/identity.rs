@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Composite fingerprints for devices and networks.
 //!
 //! MAC randomisation means a MAC alone cannot identify a device across time,

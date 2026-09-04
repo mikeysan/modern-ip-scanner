@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `mdns`: multicast DNS discovery on 224.0.0.251:5353.
 //!
 //! Sends a DNS-SD service enumeration query plus common service-type

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 import { useCallback, useEffect, useState } from "react";
 import { api, onScanDone, onScanError, onScanProgress } from "./api";
 import type { DeviceView, LastDiff, NetworkView, ScanReport } from "./types";

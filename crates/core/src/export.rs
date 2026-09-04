@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Inventory export.
 //!
 //! Lives in the core so the CLI and the GUI cannot drift apart: they used to

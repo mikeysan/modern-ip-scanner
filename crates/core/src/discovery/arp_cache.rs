@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `arp-cache`: harvest the OS neighbor/ARP table. Zero packets, always
 //! available, the baseline of every scan.
 

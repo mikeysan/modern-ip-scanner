@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AppStateInfo, Settings } from "../types";
+import type { About, AppStateInfo, Settings } from "../types";
 
 /** Human wording for the ids the core registers. An id with no entry here
  *  still appears, labelled with the id itself — the list of strategies is the
@@ -29,10 +32,12 @@ export default function SettingsPanel({ onError }: Props) {
   const [saved, setSaved] = useState(false);
   const [state, setState] = useState<AppStateInfo | null>(null);
   const [strategies, setStrategies] = useState<string[]>(DEFAULT_ENABLED);
+  const [about, setAbout] = useState<About | null>(null);
 
   useEffect(() => {
     api.getState().then(setState).catch((e) => onError(String(e)));
     api.listStrategies().then(setStrategies).catch((e) => onError(String(e)));
+    api.about().then(setAbout).catch((e) => onError(String(e)));
     api.getSettings().then((s) => {
       setSettings(s);
       setGrace(s.grace_scans);
@@ -152,6 +157,30 @@ export default function SettingsPanel({ onError }: Props) {
             </ul>
             <p className="muted small">
               Or point <code>MIPSCAN_HELPER</code> at it directly.
+            </p>
+          </>
+        )}
+      </section>
+      <section>
+        <h3>About</h3>
+        {about && (
+          <>
+            <p className="muted small">
+              {about.name} {about.version} — {about.copyright}
+            </p>
+            <p className="muted small">
+              Licensed under the {about.license_name} (
+              <code>{about.license}</code>). This is free software and comes
+              with NO WARRANTY. You may study it, change it and pass it on,
+              provided derived work carries the same licence — which under
+              section 13 covers running a modified version as a network
+              service, not only shipping a binary.
+            </p>
+            <p className="muted small">
+              Licence text: <code>{about.license_url}</code>
+            </p>
+            <p className="muted small">
+              Source: <code>{about.source_url}</code>
             </p>
           </>
         )}

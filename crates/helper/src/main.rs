@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `modern-ip-scanner-helper` — the optional privileged helper.
 //!
 //! Speaks newline-delimited JSON:

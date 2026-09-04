@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Runtime privilege probing and the optional helper client.
 //!
 //! Nothing here ever *assumes* privilege: each capability is tested with a

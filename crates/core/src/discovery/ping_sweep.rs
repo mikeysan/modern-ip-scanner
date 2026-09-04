@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `ping-sweep`: targeted liveness probes. This is *not* an address-range
 //! loop — it probes what wave 1 found (neighbor cache, mDNS, SSDP), the
 //! gateway, and a bounded set of conventional infrastructure addresses, plus

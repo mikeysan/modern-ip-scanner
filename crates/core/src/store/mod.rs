@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! SQLite-backed inventory store.
 //!
 //! Schema lives in [`MIGRATIONS`]; `user_version` drives forward-only

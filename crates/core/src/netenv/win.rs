@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Windows implementation via the IP Helper API (iphlpapi).
 //!
 //! - Interfaces: `GetAdaptersAddresses` (unicast + gateway + physical address)

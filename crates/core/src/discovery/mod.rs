@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Pluggable discovery strategies.
 //!
 //! A strategy produces `Observation`s for the interface under scan. One that

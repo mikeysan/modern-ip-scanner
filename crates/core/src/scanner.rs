@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Scan orchestration: strategies in waves, identity resolution, diff, commit.
 //!
 //! The integrity rules from docs/design.md rule 6 are assembled here: the

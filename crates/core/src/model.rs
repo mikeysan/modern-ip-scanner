@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Core data types shared across discovery, store, diff and frontends.
 
 use serde::{Deserialize, Serialize};

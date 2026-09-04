@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! Scan-vs-inventory diff engine.
 //!
 //! This is where the product's core trust property lives (docs/design.md

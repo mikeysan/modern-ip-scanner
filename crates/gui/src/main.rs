@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! modern-ip-scanner-gui: Tauri 2 shell over modern-ip-scanner-core.
 //!
 //! Commands are thin wrappers; every integrity decision (partial scans,
@@ -164,6 +167,23 @@ fn last_diff(
     })))
 }
 
+/// The GPL's "Appropriate Legal Notices" for the GUI. An interactive program
+/// is meant to show the user the terms it comes under and where its source is,
+/// which the About section in Settings does with this. Static values, so no
+/// store access is needed.
+#[tauri::command]
+fn about() -> serde_json::Value {
+    serde_json::json!({
+        "name": "Modern IP Scanner",
+        "version": env!("CARGO_PKG_VERSION"),
+        "copyright": "Copyright (C) 2026 mikey-san",
+        "license": "AGPL-3.0-or-later",
+        "license_name": "GNU Affero General Public License v3 or later",
+        "license_url": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "source_url": "https://github.com/mikeysan/modern-ip-scanner",
+    })
+}
+
 #[tauri::command]
 fn get_settings(state: SharedState) -> Result<serde_json::Value, String> {
     let store = store_of(&state);
@@ -304,6 +324,7 @@ fn main() {
             start_scan,
             list_interfaces,
             list_strategies,
+            about,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Modern IP Scanner GUI");

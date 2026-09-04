@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! One rule for what a device is called on screen.
 //!
 //! Four copies of this decision used to live in the store (twice, once of

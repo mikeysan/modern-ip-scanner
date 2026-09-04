@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 mikey-san
+
 //! `mipscan` — headless Modern IP Scanner CLI sharing the core with the GUI.
 
 use anyhow::{Context, Result};
@@ -7,10 +10,29 @@ use modern_ip_scanner_core::model::{DeviceView, NetworkView, ScanReport, Transit
 use modern_ip_scanner_core::store::Store;
 use modern_ip_scanner_core::util::fmt_time;
 
+/// The GPL's "Appropriate Legal Notices": who holds the copyright, that the
+/// program carries no warranty, the terms it may be passed on under, and where
+/// to get the source. Shown by `--version`; `-V` still prints the bare number.
+const LICENSE_NOTICE: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\n",
+    "Copyright (C) 2026 mikey-san\n",
+    "License AGPL-3.0-or-later: GNU Affero General Public License v3 or later\n",
+    "<https://www.gnu.org/licenses/agpl-3.0.html>\n",
+    "\n",
+    "This is free software: you may change it and pass it on, provided\n",
+    "derived work carries the same licence. Running a modified version as\n",
+    "a network service counts too, under section 13. There is NO WARRANTY,\n",
+    "to the extent permitted by law.\n",
+    "\n",
+    "Source: https://github.com/mikeysan/modern-ip-scanner",
+);
+
 #[derive(Parser)]
 #[command(
     name = "mipscan",
     version,
+    long_version = LICENSE_NOTICE,
     about = "LAN inventory & diff scanner — remembers your networks and devices",
     long_about = "An inventory-first LAN scanner: every scan tells you what's new, what changed, \
                   and what's gone. Runs unprivileged; use --helper for full ARP coverage."
