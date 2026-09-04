@@ -140,6 +140,11 @@ rewrite.
   raw-socket ARP resolves real addresses as root. What remains unproven is
   the `pkexec` launch path, since polkit is absent from that image, and any
   network larger than WSL's own NAT'd subnet.
+- `cargo audit` reports no vulnerability-class advisories. It does report one
+  `unsound` advisory, RUSTSEC-2024-0429 (`glib`), which GitHub surfaces as a
+  moderate Dependabot alert. It reaches the Linux build through `tauri` →
+  `gtk 0.18` and cannot be resolved here; it will clear when Tauri moves off
+  GTK 3.
 
 ## For Contributors
 
@@ -174,3 +179,7 @@ Keep as little as possible behind `#[cfg]`. Wire formats, parsing and address
 arithmetic are platform-independent even when only one platform calls them;
 put them in a plain module so both builds check them and both test runs
 exercise them (see `crates/helper/src/main.rs::arp`).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

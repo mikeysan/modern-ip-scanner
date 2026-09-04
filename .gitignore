@@ -9,8 +9,14 @@ node_modules/
 # Tauri-generated schemas
 /crates/gui/gen/
 
-# Internal working documents. README.md is the only markdown that ships;
-# these are deliberately untracked so they cannot reach the public repo.
+# Internal working documents. README.md is the only markdown that ships, so
+# these must never reach the public repo.
+#
+# Match by directory and by pattern, not by exact path. The previous rules
+# named /PLAN.md and /REVIEW.md; once those files moved under docs/ the rules
+# silently matched nothing, leaving ~200 KB of internal review material one
+# `git add -A` away from being published.
+/docs/
 /PLAN.md
 /REVIEW.md
-/docs/design.md
+*SLOP_REVIEW*.md
