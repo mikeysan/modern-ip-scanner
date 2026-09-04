@@ -367,7 +367,18 @@ pub fn run_scan(
         priv_state.notes.push(note.into());
     }
     if plan == HelperPlan::Launch {
-        progress("launching privileged helper (may prompt for elevation)...");
+        progress("launching privileged helper; waiting for authentication...");
+        // pkexec's built-in text agent waits on the terminal indefinitely when
+        // no polkit agent is registered -- the normal state on servers, over
+        // SSH and under WSL. Unexplained, that silence is indistinguishable
+        // from a hung scan, so name it before the wait starts rather than
+        // after, when there may be no "after".
+        #[cfg(target_os = "linux")]
+        {
+            if unsafe { libc::geteuid() } != 0 {
+                progress("  no prompt means no polkit agent is running; scan without the helper");
+            }
+        }
         match crate::privilege::helper::HelperClient::launch() {
             Ok(mut h) => {
                 // Verify it answers before trusting it.
