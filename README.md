@@ -10,6 +10,24 @@ fingerprint (name signals + OUI + first-seen network) instead of MAC alone,
 because MAC randomisation broke MAC-as-identity. Devices get **persistent
 user-assigned names** — the feature everything else hangs off.
 
+## Download
+
+Prebuilt archives for Windows and Linux, x64 and ARM64, are on the
+[releases page](https://github.com/mikeysan/modern-ip-scanner/releases).
+
+Match the archive to the machine. On Linux, `uname -m` reporting `x86_64`
+wants the `x64` download and `aarch64` wants `arm64`; the wrong one fails as
+`cannot execute binary file: Exec format error`, or as nothing at all when
+launched from a file manager, which discards that message. Windows on ARM
+runs either, `arm64` natively.
+
+Unpack anywhere and run — there is no installer, and the `INSTALL.txt` inside
+says what each of the three programs is for. `mipscan` needs only glibc 2.39
+or newer on Linux; the desktop app additionally needs WebKitGTK, which most
+systems do not install by default (`sudo apt install libwebkit2gtk-4.1-0`).
+
+To build from source instead, see [Build & run](#build--run).
+
 ## Non-negotiables
 
 - **Unprivileged by default.** Neighbor-cache reads, mDNS/SSDP/NetBIOS probes

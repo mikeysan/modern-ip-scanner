@@ -105,6 +105,48 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # Which archive to take is the first thing a visitor needs and the
+      # easiest thing to get wrong: an arm64 download on an x86_64 machine
+      # fails as "Exec format error", or as a file manager doing nothing at
+      # all. Written out rather than left to --generate-notes, which for this
+      # repository yields only a changelog link -- everything merges locally,
+      # so there are no pull requests to summarise -- and which would
+      # otherwise compete for the same field.
+      - name: Write the release notes
+        run: |
+          cat > notes.md <<'NOTES'
+          ### Which download?
+
+          | Your machine | Archive |
+          | --- | --- |
+          | Linux, `uname -m` says `x86_64` | `mipscan-*-linux-x64.tar.gz` |
+          | Linux, `uname -m` says `aarch64` | `mipscan-*-linux-arm64.tar.gz` |
+          | Windows on Intel or AMD | `mipscan-*-windows-x64.zip` |
+          | Windows on ARM | `mipscan-*-windows-arm64.zip` (x64 also runs, emulated) |
+
+          The wrong one fails as `cannot execute binary file: Exec format error`,
+          or as nothing happening at all when launched from a file manager.
+
+          ### Running it
+
+          Unpack anywhere and run; there is no installer. `INSTALL.txt` inside
+          says what each of the three programs is for.
+
+          `mipscan` needs only glibc 2.39 or newer on Linux -- Ubuntu 24.04,
+          Debian 13, Fedora 40 and later. The desktop app additionally needs
+          WebKitGTK, which most systems do not install by default:
+
+              sudo apt install libwebkit2gtk-4.1-0
+
+          On Windows the desktop app uses the Edge WebView2 runtime, already
+          present on Windows 11 and current Windows 10.
+          NOTES
+          {
+            echo
+            echo "**Full changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}"
+          } >> notes.md
+          cat notes.md
+
       # GitHub attaches the tag's own source archives to every release, which
       # is what satisfies AGPL section 6 for these binaries.
       - name: Create the release
@@ -115,5 +157,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
+            --notes-file notes.md \
             artifacts/*

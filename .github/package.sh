@@ -87,6 +87,44 @@ done
 # with the source.
 cp LICENSE README.md "$stage/"
 
+# What someone actually needs in order to run this, per platform. Both halves
+# are failures seen for real: the wrong architecture (an arm64 download on an
+# x86_64 Pop!_OS machine) and the GUI's WebKitGTK runtime missing on a clean
+# system. Neither says anything useful through a file manager, which discards
+# the error and simply does nothing.
+case "$platform" in
+windows)
+    # Windows on ARM runs x64 under emulation, so only one direction breaks.
+    # WebView2 ships with Windows 11 and reaches current Windows 10 through
+    # Microsoft Edge; older and LTSC images have neither.
+    platform_notes="This build is for windows ${arch}. A Windows-on-ARM machine will also run the
+x64 build under emulation, but not the reverse: the arm64 build does not start
+on an x64 machine. Yours is in Settings > System > About, as \"System type\".
+
+The GUI needs the Microsoft Edge WebView2 runtime. Windows 11 and current
+Windows 10 already have it. On an older or LTSC image, install the Evergreen
+runtime from Microsoft first, or the window never appears."
+    ;;
+linux)
+    # Measured, not assumed: on a clean Ubuntu 24.04 the GUI is missing 11 of
+    # its 15 shared libraries, and libwebkit2gtk-4.1-0 alone supplies all 11.
+    platform_notes="This build is for linux ${arch}. The wrong one fails as \"cannot execute binary
+file: Exec format error\". Check yours with \`uname -m\`: x86_64 wants the x64
+download, aarch64 wants arm64.
+
+mipscan and the helper need nothing beyond glibc 2.39 or newer -- Ubuntu 24.04,
+Debian 13, Fedora 40 and later. They do not start on Ubuntu 22.04 or Debian 12.
+
+The GUI additionally needs the WebKitGTK runtime, which most systems do not
+install by default. On Debian and Ubuntu:
+
+  sudo apt install libwebkit2gtk-4.1-0
+
+That one package pulls in the rest (GTK 3, libsoup 3, JavaScriptCore). Without
+it the GUI exits immediately with a \"cannot open shared object file\" error."
+    ;;
+esac
+
 # Three executables in one folder is not self-explanatory, so say which is
 # which at the point someone unpacks them.
 cat > "$stage/INSTALL.txt" <<EOF
@@ -103,7 +141,7 @@ executable that launches it, and it is what makes the elevated full-ARP sweep
 available -- without it, scans needing it are reported as partial and no
 device can be reported "gone".
 
-Nothing here requires installation; run the GUI from wherever you unpack it.
+${platform_notes}
 
 Licensed under the GNU Affero General Public License v3 or later. The full
 terms are in LICENSE, and the corresponding source for this build is the
