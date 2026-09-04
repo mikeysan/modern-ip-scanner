@@ -70,13 +70,13 @@ jobs:
       # from the custom-protocol feature rather than from the cargo profile, so
       # without it the GUI ships pointed at devUrl and opens on "localhost
       # refused to connect" -- a break that no build log would show.
+      #
+      # One line, no backslash continuations, matching ci.yml. The Windows
+      # runners default to PowerShell, where `\` does not continue a line: the
+      # first attempt at this was split into separate commands and died on
+      # "Missing expression after unary operator '--'".
       - name: Build the binaries
-        run: |
-          cargo build --release \
-            -p modern-ip-scanner-gui \
-            -p modern-ip-scanner \
-            -p modern-ip-scanner-helper \
-            --features modern-ip-scanner-gui/custom-protocol
+        run: cargo build --release -p modern-ip-scanner-gui -p modern-ip-scanner -p modern-ip-scanner-helper --features modern-ip-scanner-gui/custom-protocol
 
       # Git Bash on the Windows runner, so one script covers both platforms.
       - name: Package
