@@ -182,4 +182,10 @@ exercise them (see `crates/helper/src/main.rs::arp`).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Copyright (C) 2026 mikey-san.
+
+Licensed under the GNU Affero General Public License, version 3 or later —
+see [LICENSE](LICENSE). You may use, study, modify and redistribute this, but
+derived work has to carry the same licence, and under section 13 that duty
+also applies to running a modified version as a network service rather than
+shipping it.
