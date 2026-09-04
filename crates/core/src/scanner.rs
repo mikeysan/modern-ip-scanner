@@ -384,12 +384,22 @@ pub fn run_scan(
                             .push(crate::model::Capability::ArpResolve);
                         *helper.lock().unwrap_or_else(|p| p.into_inner()) = Some(h);
                     }
-                    Err(e) => priv_state
-                        .notes
-                        .push(format!("helper launched but failed: {e}")),
+                    Err(e) => {
+                        let note = format!("helper launched but failed: {e}");
+                        progress(&note);
+                        priv_state.notes.push(note);
+                    }
                 }
             }
-            Err(e) => priv_state.notes.push(format!("helper unavailable: {e}")),
+            // Say why out loud, not just into `notes`: nothing reads those
+            // back, so a silent failure leaves the partial-scan reasons telling
+            // the user to "launch with the privileged helper" when launching it
+            // is exactly what they asked for.
+            Err(e) => {
+                let note = format!("helper unavailable: {e}");
+                progress(&note);
+                priv_state.notes.push(note);
+            }
         }
     }
 
