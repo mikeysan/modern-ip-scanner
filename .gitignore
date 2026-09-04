@@ -9,14 +9,22 @@ node_modules/
 # Tauri-generated schemas
 /crates/gui/gen/
 
-# Internal working documents. README.md is the only markdown that ships, so
-# these must never reach the public repo.
+# Documentation policy: no markdown ships unless it is named below.
 #
-# Match by directory and by pattern, not by exact path. The previous rules
-# named /PLAN.md and /REVIEW.md; once those files moved under docs/ the rules
-# silently matched nothing, leaving ~200 KB of internal review material one
-# `git add -A` away from being published.
+# Default-deny, because the previous default-allow list broke silently. It
+# named /PLAN.md and /REVIEW.md; when those files moved under docs/ the rules
+# matched nothing, and ~200 KB of internal review material sat one
+# `git add -A` away from being published. Under these rules a new internal
+# document is ignored the moment it is created, and shipping one is a
+# deliberate edit here rather than something you have to remember.
+#
+# The exceptions are anchored to the repo root, so a markdown file added
+# deeper in the tree — a crate-level README, say — is ignored until it is
+# named here too.
+*.md
+!/README.md
+!/SECURITY.md
+
+# Internal working documents. Ignored as a directory, so non-markdown notes
+# dropped in here are covered as well.
 /docs/
-/PLAN.md
-/REVIEW.md
-*SLOP_REVIEW*.md
