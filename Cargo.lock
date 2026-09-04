@@ -2004,7 +2004,7 @@ dependencies = [
 
 [[package]]
 name = "modern-ip-scanner"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2014,7 +2014,7 @@ dependencies = [
 
 [[package]]
 name = "modern-ip-scanner-core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "dirs",
@@ -2030,7 +2030,7 @@ dependencies = [
 
 [[package]]
 name = "modern-ip-scanner-gui"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "modern-ip-scanner-core",
  "serde",
@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "modern-ip-scanner-helper"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "libc",
  "serde",
