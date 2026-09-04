@@ -1,6 +1,8 @@
 /target
 node_modules/
 /ui/dist/
+# Release archives assembled by .github/package.sh.
+/dist/
 *.sqlite3
 *.sqlite3-*
 *.log

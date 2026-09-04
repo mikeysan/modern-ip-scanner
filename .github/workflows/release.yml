@@ -1,0 +1,103 @@
+name: Release
+
+# Only a tag publishes. An ordinary push to main cannot produce a release by
+# accident, and `workflow_dispatch` exercises the whole build without cutting
+# one, so the pipeline can be proven before a tag is ever pushed.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: windows
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Tauri system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            file
+
+      # custom-protocol embeds ui/dist into the binary, so the frontend has to
+      # exist before the Rust build rather than after it.
+      - name: Build the frontend
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      # `--release` on its own is not enough. Tauri decides dev-versus-production
+      # from the custom-protocol feature rather than from the cargo profile, so
+      # without it the GUI ships pointed at devUrl and opens on "localhost
+      # refused to connect" -- a break that no build log would show.
+      - name: Build the binaries
+        run: |
+          cargo build --release \
+            -p modern-ip-scanner-gui \
+            -p modern-ip-scanner \
+            -p modern-ip-scanner-helper \
+            --features modern-ip-scanner-gui/custom-protocol
+
+      # Git Bash on the Windows runner, so one script covers both platforms.
+      - name: Package
+        shell: bash
+        run: .github/package.sh ${{ matrix.platform }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mipscan-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    # A manual run stops here, leaving the archives downloadable from the run
+    # itself; only a tag goes on to publish them.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # GitHub attaches the tag's own source archives to every release, which
+      # is what satisfies AGPL section 6 for these binaries.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l artifacts
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            artifacts/*
