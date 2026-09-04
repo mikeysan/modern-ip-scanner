@@ -13,17 +13,29 @@ permissions:
 
 jobs:
   build:
-    name: build (${{ matrix.platform }})
+    name: build (${{ matrix.platform }} ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     strategy:
-      # One platform failing should not hide the other's result.
+      # One target failing should not hide the other three.
       fail-fast: false
       matrix:
+        # `arch` is here only to name jobs and artifacts. package.sh works the
+        # real architecture out from the toolchain that built the binaries, so
+        # the archive inside cannot disagree with the label outside.
+        # ARM runners are free and unlimited on public repositories.
         include:
           - os: ubuntu-latest
             platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
           - os: windows-latest
             platform: windows
+            arch: x64
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -32,8 +44,10 @@ jobs:
         with:
           node-version: 22
 
+      # Keyed on the platform, not on a runner label: both Linux runners need
+      # these, and gating on `ubuntu-latest` would silently skip the ARM one.
       - name: Tauri system dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -69,9 +83,11 @@ jobs:
         shell: bash
         run: .github/package.sh ${{ matrix.platform }}
 
+      # The arch has to be in the artifact name too: four jobs share two
+      # platform values, and duplicate artifact names fail the upload.
       - uses: actions/upload-artifact@v7
         with:
-          name: mipscan-${{ matrix.platform }}
+          name: mipscan-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
